@@ -1,0 +1,8 @@
+rules_version = '2';
+service cloud.firestore {
+ match /databases/{database}/documents {
+  function member(shopId) { return request.auth != null && exists(/databases/$(database)/documents/shops/$(shopId)/members/$(request.auth.uid)); }
+  match /shops/{shopId}/{document=**} { allow read, write: if member(shopId); }
+  match /shops/{shopId}/members/{uid} { allow read: if request.auth != null && request.auth.uid==uid; allow write: if false; }
+ }
+}
