@@ -1,0 +1,30 @@
+{
+  "project_info": {
+    "project_number": "386450384115",
+    "firebase_url": "https://skmedcare-c1791-default-rtdb.firebaseio.com",
+    "project_id": "skmedcare-c1791",
+    "storage_bucket": "skmedcare-c1791.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:386450384115:android:654e74e6ae2f3122be0386",
+        "android_client_info": {
+          "package_name": "com.srikrishnamedicals.skmedcare"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCeY06TLbnIGl8RSs6nDuQoi5Z9gibs590"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
