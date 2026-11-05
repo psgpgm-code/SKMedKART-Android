@@ -673,7 +673,7 @@ class MainActivity : AppCompatActivity() {
             "customers" -> row.optString("mobile").ifBlank { row.optString("phone") }.ifBlank { row.optString("name") }
             "products" -> row.optString("name").ifBlank { row.optString("medicine") }.ifBlank { row.optString("code") }
             "bills" -> row.optString("invoiceNumber").ifBlank { row.optString("invoiceNo") }.ifBlank { row.optString("billNo") }
-            "purchases" -> (row.optString("invoiceNo") + "_" + row.optString("batchNumber").ifBlank { row.optString("batchNo") }).trim("_")
+            "purchases" -> (row.optString("invoiceNo") + "_" + row.optString("batchNumber").ifBlank { row.optString("batchNo") }).trim { it == '_' }
             "batches" -> (row.optString("productId").ifBlank { row.optString("productName") }.ifBlank { row.optString("medicine") } + "__" + row.optString("batchNumber").ifBlank { row.optString("batchNo") })
             "suppliers" -> row.optString("name").ifBlank { row.optString("mobile") }
             else -> ""
