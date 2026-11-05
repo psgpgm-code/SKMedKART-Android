@@ -228,7 +228,7 @@ class MainActivity : AppCompatActivity() {
             snap.documents.forEach { d ->
                 body.addView(TextView(this).apply {
                     text = (d.getString("medicine") ?: "") + "\nBatch: " + (d.getString("batchNo") ?: "") +
-                        " • Exp: " + (d.getString("expiry") ?: "") + "\\nAvailable: " +
+                        " • Exp: " + (d.getString("expiry") ?: "") + "\nAvailable: " +
                         (d.getDouble("availableQty") ?: 0.0) + " • Sold: " + (d.getDouble("soldQty") ?: 0.0)
                     setPadding(8,10,8,10)
                 })
@@ -275,7 +275,7 @@ class MainActivity : AppCompatActivity() {
                     status.text = snap.size().toString() + " customers"
                     snap.documents.forEach { d -> body.addView(TextView(this@MainActivity).apply {
                         text = (d.getString("name") ?: "") + " • " + (d.getString("mobile") ?: "") +
-                            "\\n" + (d.getString("medicinePlan") ?: "") + "\n" + (d.getString("instructions") ?: "")
+                            "\n" + (d.getString("medicinePlan") ?: "") + "\n" + (d.getString("instructions") ?: "")
                         setPadding(8,10,8,10)
                     }) }
                 }
