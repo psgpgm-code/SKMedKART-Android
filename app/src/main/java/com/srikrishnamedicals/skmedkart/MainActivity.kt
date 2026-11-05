@@ -3,6 +3,13 @@ package com.srikrishnamedicals.skmedkart
 import android.os.Bundle
 import android.view.Gravity
 import android.widget.*
+import androidx.activity.result.contract.ActivityResultContracts
+import com.google.firebase.FirebaseApp
+import com.google.firebase.FirebaseOptions
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.BufferedReader
+import java.io.InputStreamReader
 import androidx.appcompat.app.AppCompatActivity
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FieldValue
@@ -17,10 +24,29 @@ class MainActivity : AppCompatActivity() {
     private lateinit var root: LinearLayout
     private lateinit var body: LinearLayout
     private lateinit var status: TextView
+    private val backupCollections = listOf("products","batches","bills","purchases","suppliers","customers","reminders","orders","stockMovements")
+    private val restorePicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@registerForActivityResult
+        try {
+            val text = contentResolver.openInputStream(uri)?.use { BufferedReader(InputStreamReader(it, Charsets.UTF_8)).readText() }
+                ?: error("Could not read backup file")
+            restoreAdminBackup(text)
+        } catch (e: Exception) { status.text = "Restore failed: " + (e.message ?: "Invalid backup file") }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        initializeFirebase()
         if (auth.currentUser == null) login() else dashboard()
+    }
+
+    private fun initializeFirebase() {
+        if (FirebaseApp.getApps(this).isNotEmpty()) return
+        FirebaseApp.initializeApp(this, FirebaseOptions.Builder()
+            .setApiKey("AIzaSyBdvOUiTVoBJHPE418iZqNzYftiN9yjooA")
+            .setApplicationId("1:921893232974:web:e7fab8eae5eaaec6597e1f")
+            .setProjectId("skmedkart")
+            .setStorageBucket("skmedkart.firebasestorage.app").build())
     }
 
     private fun page(title: String) {
@@ -98,6 +124,8 @@ class MainActivity : AppCompatActivity() {
         nav("Customers & Reminders") { customers() }
         nav("H / H1 Register") { register() }
         nav("Reports") { reports() }
+        nav("Backup & Restore") { backupRestore() }
+        nav("Restored Admin Data") { restoredData() }
     }
 
     private fun nav(text: String, action: () -> Unit) {
@@ -314,6 +342,104 @@ class MainActivity : AppCompatActivity() {
                 status.text="Live report loaded."
             }
         }.addOnFailureListener { status.text="Report failed: " + (it.message ?: "") }
+    }
+
+    private fun backupRestore() {
+        page("Backup & Restore"); back()
+        body.addView(TextView(this).apply {
+            text = "Restore the JSON backup downloaded from the existing offline SKMedKART Admin app.\n\nSupported collections:\nProducts • Batches • Bills • Purchases • Suppliers • Customers • Reminders • Orders • Stock Movements\n\nThis app writes the backup into Firebase. The existing offline Admin app is not changed."
+            textSize = 16f; setPadding(8, 8, 8, 16)
+        })
+        body.addView(Button(this).apply {
+            text = "📂 Choose Admin Backup File"
+            isAllCaps = false
+            setOnClickListener { restorePicker.launch(arrayOf("application/json","text/json","text/plain")) }
+        })
+    }
+
+    private fun restoredData() {
+        page("Restored Admin Data"); back()
+        status.text = "Loading Firebase data..."
+        backupCollections.forEach { name ->
+            db.collection(name).get().addOnSuccessListener { snap ->
+                body.addView(TextView(this).apply {
+                    text = name.uppercase(Locale.US) + " • " + snap.size() + " records"
+                    textSize = 18f; setPadding(8, 12, 8, 4)
+                })
+                snap.documents.take(100).forEach { d ->
+                    body.addView(TextView(this).apply {
+                        text = d.id + "\n" + (d.data?.entries?.joinToString("\n") { it.key + ": " + it.value } ?: "")
+                        setPadding(12, 6, 8, 8)
+                    })
+                }
+            }.addOnFailureListener { status.text = "Firebase read failed for " + name + ": " + (it.message ?: "") }
+        }
+    }
+
+    private fun restoreAdminBackup(text: String) {
+        val root = JSONObject(text)
+        val collections = root.optJSONObject("collections")
+            ?: throw IllegalArgumentException("Invalid SKMedKART backup: collections not found")
+        page("Restore Backup")
+        body.addView(TextView(this).apply {
+            text = "Restoring Admin backup into Firebase…\nPlease keep the app open until completion."
+            textSize = 17f
+        })
+        Thread {
+            try {
+                var total = 0
+                for (name in backupCollections) {
+                    val rows = collections.optJSONArray(name) ?: JSONArray()
+                    var start = 0
+                    while (start < rows.length()) {
+                        val batch = db.batch()
+                        val end = minOf(start + 400, rows.length())
+                        for (i in start until end) {
+                            val row = rows.getJSONObject(i)
+                            val id = row.optString("id").ifBlank { error("Missing document id in " + name) }
+                            val data = jsonObjectToMap(row)
+                            data.remove("id")
+                            batch.set(db.collection(name).document(id), data, SetOptions.merge())
+                        }
+                        batch.commit().get()
+                        total += end - start
+                        start = end
+                    }
+                }
+                runOnUiThread {
+                    status.text = "Restore completed • " + total + " records written to Firebase"
+                    body.removeAllViews()
+                    body.addView(TextView(this).apply {
+                        text = "✅ Admin backup restored successfully.\n\nAll supported offline Admin collections were copied to Firebase.\n\nExisting Admin app: unchanged."
+                        textSize = 18f; setPadding(8, 16, 8, 16)
+                    })
+                    nav("View Restored Data") { restoredData() }
+                }
+            } catch (e: Exception) {
+                runOnUiThread { status.text = "Restore failed: " + (e.message ?: "Unknown Firebase error") }
+            }
+        }.start()
+    }
+
+    private fun jsonObjectToMap(obj: JSONObject): MutableMap<String, Any?> {
+        val out = mutableMapOf<String, Any?>()
+        val keys = obj.keys()
+        while (keys.hasNext()) {
+            val key = keys.next()
+            out[key] = jsonValueToFirebase(obj.get(key))
+        }
+        return out
+    }
+
+    private fun jsonValueToFirebase(value: Any?): Any? = when (value) {
+        JSONObject.NULL -> null
+        is JSONObject -> jsonObjectToMap(value)
+        is JSONArray -> {
+            val list = ArrayList<Any?>()
+            for (i in 0 until value.length()) list.add(jsonValueToFirebase(value.get(i)))
+            list
+        }
+        else -> value
     }
 
     private fun stockId(medicine: String, batch: String): String =
