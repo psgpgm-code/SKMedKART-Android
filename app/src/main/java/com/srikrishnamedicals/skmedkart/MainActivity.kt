@@ -615,28 +615,29 @@ class MainActivity : AppCompatActivity() {
                     if (rows.length() == 0) continue
                     var start = 0
                     while (start < rows.length()) {
-                        val end = minOf(start + 400, rows.length())
-                        val batch = db.batch()
-                        for (i in start until end) {
-                            val row = rows.optJSONObject(i) ?: throw IllegalArgumentException("$name record ${i + 1} is not a JSON object")
-                            val id = backupDocumentId(name, row, i)
-                            val data = jsonObjectToMap(row)
-                            data.remove("id"); data.remove("docId"); data.remove("documentId"); data.remove("_id")
-                            data["_originalBackupId"] = id
-                            batch.set(db.collection(name).document(id), data, SetOptions.merge())
-                        }
+                        val end = minOf(start + 100, rows.length())
                         runOnUiThread { progress.text = "Restoring $name… ${start + 1}–$end/${rows.length()} records\\nTotal restored: $total" }
 
                         var committed = false
                         var lastError: Exception? = null
-                        for (attempt in 1..1) {
+                        // Mobile-safe restore: small batches + a fresh WriteBatch for every retry.
+                        for (attempt in 1..3) {
                             try {
-                                Tasks.await(batch.commit(), 45, TimeUnit.SECONDS)
+                                val batch = db.batch()
+                                for (i in start until end) {
+                                    val row = rows.optJSONObject(i) ?: throw IllegalArgumentException("$name record ${i + 1} is not a JSON object")
+                                    val id = backupDocumentId(name, row, i)
+                                    val data = jsonObjectToMap(row)
+                                    data.remove("id"); data.remove("docId"); data.remove("documentId"); data.remove("_id")
+                                    data["_originalBackupId"] = id
+                                    batch.set(db.collection(name).document(id), data, SetOptions.merge())
+                                }
+                                Tasks.await(batch.commit(), 90, TimeUnit.SECONDS)
                                 committed = true
                                 break
                             } catch (e: Exception) {
                                 lastError = e
-                                if (attempt < 3) Thread.sleep(attempt * 1000L)
+                                if (attempt < 3) Thread.sleep(attempt * 1500L)
                             }
                         }
                         if (!committed) throw IllegalStateException("Firebase write failed in $name records ${start + 1}-$end: ${lastError?.message ?: "timeout"}")
