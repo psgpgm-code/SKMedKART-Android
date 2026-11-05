@@ -116,18 +116,182 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun dashboard() {
-        page("SKMedKART Dashboard")
+        window.statusBarColor = 0xFF24629B.toInt()
+        root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(0xFFF2F7FB.toInt())
+        }
+
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(28, 22, 20, 20)
+            setBackgroundColor(0xFF24629B.toInt())
+        }
+        header.addView(TextView(this).apply {
+            text = "💊 SKMedKART"
+            textSize = 30f
+            setTextColor(0xFFFFFFFF.toInt())
+            setTypeface(null, android.graphics.Typeface.BOLD)
+        })
+        header.addView(TextView(this).apply {
+            text = "Sri Krishna Medicals • Pennagaram"
+            textSize = 18f
+            setTextColor(0xFFFFFFFF.toInt())
+            setPadding(0, 6, 0, 0)
+        })
+        root.addView(header)
+
+        val scroll = ScrollView(this)
+        body = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(18, 18, 18, 24)
+        }
+        scroll.addView(body)
+        root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
+
+        val bottom = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setBackgroundColor(0xFFFFFFFF.toInt())
+            setPadding(4, 8, 4, 6)
+        }
+        listOf(
+            "🏠\nHome" to { dashboard() },
+            "🧾\nBilling" to { billing() },
+            "📊\nReports" to { reports() },
+            "💊\nStock" to { stock() },
+            "🏭\nPurchase" to { purchase() },
+            "⚙️\nSettings" to { backupRestore() }
+        ).forEach { (label, action) ->
+            bottom.addView(TextView(this).apply {
+                text = label
+                textSize = 13f
+                gravity = Gravity.CENTER
+                setTextColor(0xFF50606F.toInt())
+                setPadding(2, 2, 2, 2)
+                setOnClickListener { action() }
+            }, LinearLayout.LayoutParams(0, 62, 1f))
+        }
+        root.addView(bottom)
+
+        setContentView(root)
+        status = TextView(this)
         status.text = "Live Firebase • " + (auth.currentUser?.email ?: "")
-        nav("Billing") { billing() }
-        nav("Purchase Entry") { purchase() }
-        nav("Batch-wise Stock") { stock() }
-        nav("Bill History") { history("bills") }
-        nav("Purchase History") { history("purchases") }
-        nav("Customers & Reminders") { customers() }
-        nav("H / H1 Register") { register() }
-        nav("Reports") { reports() }
-        nav("Backup & Restore") { backupRestore() }
-        nav("Restored Admin Data") { restoredData() }
+        status.setTextColor(0xFF6D7780.toInt())
+        status.textSize = 14f
+        body.addView(status)
+
+        val safe = TextView(this).apply {
+            text = "📱  Firebase Connected\nBills, purchases and stock are connected to Firebase. Existing offline Admin app is not modified."
+            textSize = 16f
+            setTextColor(0xFF6A5B1A.toInt())
+            setPadding(18, 18, 18, 18)
+            background = android.graphics.drawable.GradientDrawable().apply {
+                setColor(0xFFFFF8D9.toInt())
+                setStroke(1, 0xFFE5D78A.toInt())
+                cornerRadius = 26f
+            }
+        }
+        body.addView(safe, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = 18 })
+
+        val cards = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        cards.addView(dashboardCard("🧾", "Today's Sales", "₹0.00"), LinearLayout.LayoutParams(0, 155, 1f).apply { rightMargin = 8 })
+        cards.addView(dashboardCard("📦", "Stock Batches", "Loading…"), LinearLayout.LayoutParams(0, 155, 1f).apply { leftMargin = 8 })
+        body.addView(cards)
+        body.addView(LinearLayout(this).apply { minimumHeight = 16 })
+
+        val cards2 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        cards2.addView(dashboardCard("⚠️", "Low Stock", "Loading…"), LinearLayout.LayoutParams(0, 155, 1f).apply { rightMargin = 8 })
+        cards2.addView(dashboardCard("⏰", "Expiry Alerts", "Loading…"), LinearLayout.LayoutParams(0, 155, 1f).apply { leftMargin = 8 })
+        body.addView(cards2)
+
+        body.addView(TextView(this).apply {
+            text = "⚡ Quick Actions"
+            textSize = 28f
+            setTypeface(null, android.graphics.Typeface.BOLD)
+            setTextColor(0xFF263B52.toInt())
+            setPadding(8, 24, 8, 12)
+        })
+
+        val q1 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        q1.addView(quickButton("➕ New Bill") { billing() }, LinearLayout.LayoutParams(0, 62, 1f).apply { rightMargin = 8 })
+        q1.addView(quickButton("🏭 Purchase Entry") { purchase() }, LinearLayout.LayoutParams(0, 62, 1f).apply { leftMargin = 8 })
+        body.addView(q1)
+
+        val q2 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        q2.addView(quickButton("📦 Stock") { stock() }, LinearLayout.LayoutParams(0, 62, 1f).apply { rightMargin = 8 })
+        q2.addView(quickButton("🔔 Reminders") { customers() }, LinearLayout.LayoutParams(0, 62, 1f).apply { leftMargin = 8 })
+        body.addView(q2)
+
+        body.addView(quickButton("💾 Backup & Restore") { backupRestore() }.apply {
+            setBackgroundColor(0xFF238A68.toInt())
+            setTextColor(0xFFFFFFFF.toInt())
+        }, LinearLayout.LayoutParams(-1, 62).apply { topMargin = 14 })
+
+        loadDashboardStats()
+    }
+
+    private fun dashboardCard(icon: String, title: String, value: String): TextView =
+        TextView(this).apply {
+            text = icon + "\n" + title + "\n" + value
+            textSize = 17f
+            setTextColor(0xFF2D4660.toInt())
+            setPadding(22, 18, 12, 12)
+            background = android.graphics.drawable.GradientDrawable().apply {
+                setColor(0xFFFFFFFF.toInt())
+                cornerRadius = 34f
+            }
+        }
+
+    private fun quickButton(text: String, action: () -> Unit): Button =
+        Button(this).apply {
+            this.text = text
+            isAllCaps = false
+            textSize = 16f
+            setTypeface(null, android.graphics.Typeface.BOLD)
+            setTextColor(0xFF31516D.toInt())
+            setOnClickListener { action() }
+            background = android.graphics.drawable.GradientDrawable().apply {
+                setColor(0xFFE4EDF5.toInt())
+                cornerRadius = 32f
+            }
+        }
+
+    private fun loadDashboardStats() {
+        db.collection("bills").get().addOnSuccessListener { bills ->
+            val sales = bills.documents.sumOf { it.getDouble("total") ?: 0.0 }
+            val salesCard = body.getChildAt(1) as? LinearLayout
+            val first = salesCard?.getChildAt(0) as? TextView
+            first?.text = "🧾\nToday's Sales\n₹%.2f".format(Locale.US, sales)
+        }
+        db.collection("stock").get().addOnSuccessListener { stock ->
+            val row1 = body.getChildAt(2) as? LinearLayout
+            val stockCard = row1?.getChildAt(1) as? TextView
+            stockCard?.text = "📦\nStock Batches\n" + stock.size()
+            var low = 0
+            var expiry = 0
+            val now = System.currentTimeMillis()
+            stock.documents.forEach { d ->
+                if ((d.getDouble("availableQty") ?: 0.0) <= 10.0) low++
+                val exp = d.getString("expiry") ?: ""
+                if (exp.isNotBlank()) {
+                    val parts = exp.split("/", "-")
+                    if (parts.size >= 2) {
+                        val y = parts.last().toIntOrNull()
+                        val m = parts.first().toIntOrNull()
+                        if (y != null && m != null) {
+                            val year = if (y < 100) 2000 + y else y
+                            val cal = java.util.Calendar.getInstance().apply {
+                                set(year, m - 1, 1, 0, 0, 0); set(java.util.Calendar.MILLISECOND, 0)
+                            }
+                            if (cal.timeInMillis <= now + 90L * 24 * 60 * 60 * 1000) expiry++
+                        }
+                    }
+                }
+            }
+            val row2 = body.getChildAt(4) as? LinearLayout
+            (row2?.getChildAt(0) as? TextView)?.text = "⚠️\nLow Stock\n" + low
+            (row2?.getChildAt(1) as? TextView)?.text = "⏰\nExpiry Alerts\n" + expiry
+        }
     }
 
     private fun nav(text: String, action: () -> Unit) {
