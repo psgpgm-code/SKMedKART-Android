@@ -662,7 +662,7 @@ class MainActivity : AppCompatActivity() {
             row.optString(key).takeIf { it.isNotBlank() }
         }
         if (explicit != null) {
-            val cleaned = safeId(explicit)
+            val cleaned = normalizeFirestoreId(explicit)
             if (cleaned.isNotBlank()) return cleaned
         }
 
@@ -683,6 +683,12 @@ class MainActivity : AppCompatActivity() {
         val digest = MessageDigest.getInstance("SHA-256").digest(row.toString().toByteArray(Charsets.UTF_8))
         return collection + "__" + digest.joinToString("") { "%02x".format(it) }.take(60) + "__" + index
     }
+    private fun normalizeFirestoreId(value: String): String {
+        val cleaned = value.trim().replace("/", "_")
+        if (cleaned.isBlank() || cleaned == "." || cleaned == "..") return ""
+        return cleaned.take(120)
+    }
+
     private fun safeId(value: String): String =
         value.trim().lowercase(Locale.US).replace(Regex("[^a-z0-9_-]"), "_").take(120)
 
