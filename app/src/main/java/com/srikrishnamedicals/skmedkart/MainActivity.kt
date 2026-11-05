@@ -394,53 +394,72 @@ class MainActivity : AppCompatActivity() {
         }.addOnFailureListener { status.text = "Batch lookup failed: " + (it.message ?: "Permission denied") }
     }
     private fun purchase() {
-        page("Purchase Entry"); back()
+        page("Purchase / Stock Upload"); back()
         val supplier = input("Supplier")
         val inv = input("Purchase invoice No")
         val date = input("Purchase date")
-        val med = input("Medicine")
+        val med = input("🔍 Search or enter medicine name")
         val batch = input("Batch No")
         val expiry = input("Expiry MM/YYYY")
         val pp = input("Purchase price", 8194)
         val mrp = input("MRP", 8194)
         val qty = input("Quantity", 2)
-        listOf(supplier,inv,date,med,batch,expiry,pp,mrp,qty).forEach { body.addView(it) }
+        val minQty = input("Minimum Quantity", 2)
+        val category = input("Category")
+        val schedule = input("Schedule H / H1")
+        listOf(supplier, inv, date, med, batch, expiry, pp, mrp, qty, minQty, category, schedule).forEach { body.addView(it) }
         body.addView(Button(this).apply {
-            text = "Save Purchase & Increase Stock"
+            text = "SAVE PURCHASE / UPLOAD STOCK"
             setOnClickListener {
                 val q = qty.text.toString().toDoubleOrNull() ?: 0.0
                 if (med.text.isBlank() || batch.text.isBlank() || q <= 0) {
                     status.text = "Medicine, batch and quantity are required."; return@setOnClickListener
                 }
+                status.text = "Saving purchase and updating Firebase stock..."
+                val productId = safeId("product_" + med.text.toString())
+                val batchId = safeId(productId + "__" + batch.text.toString())
+                val productRef = db.collection("products").document(productId)
+                val batchRef = db.collection("batches").document(batchId)
                 val purchaseRef = db.collection("purchases").document()
-                val stockRef = db.collection("stock").document(stockId(med.text.toString(),batch.text.toString()))
                 db.runTransaction { tx ->
-                    val old = tx.get(stockRef)
-                    val available = old.getDouble("availableQty") ?: 0.0
+                    val oldBatch = tx.get(batchRef)
+                    val oldStock = if (oldBatch.exists()) number(oldBatch.get("stock")) else 0.0
+                    tx.set(productRef, mapOf(
+                        "id" to productId, "name" to med.text.toString().trim(), "medicine" to med.text.toString().trim(),
+                        "category" to category.text.toString().trim(), "schedule" to schedule.text.toString().trim(),
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    ), SetOptions.merge())
+                    tx.set(batchRef, mapOf(
+                        "id" to batchId, "productId" to productId, "productName" to med.text.toString().trim(),
+                        "medicine" to med.text.toString().trim(), "batchNumber" to batch.text.toString().trim(),
+                        "batchNo" to batch.text.toString().trim(), "expiry" to expiry.text.toString().trim(),
+                        "stock" to oldStock + q, "minQty" to (minQty.text.toString().toDoubleOrNull() ?: 10.0),
+                        "purchasePrice" to (pp.text.toString().toDoubleOrNull() ?: 0.0),
+                        "mrp" to (mrp.text.toString().toDoubleOrNull() ?: 0.0),
+                        "supplier" to supplier.text.toString().trim(), "purchaseInvoice" to inv.text.toString().trim(),
+                        "schedule" to schedule.text.toString().trim(), "category" to category.text.toString().trim(),
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    ), SetOptions.merge())
                     tx.set(purchaseRef, mapOf(
                         "supplier" to supplier.text.toString(), "invoiceNo" to inv.text.toString(),
                         "purchaseDate" to date.text.toString(), "medicine" to med.text.toString(),
-                        "batchNo" to batch.text.toString(), "expiry" to expiry.text.toString(),
-                        "purchasePrice" to (pp.text.toString().toDoubleOrNull() ?: 0.0),
+                        "productName" to med.text.toString(), "productId" to productId,
+                        "batchNo" to batch.text.toString(), "batchNumber" to batch.text.toString(), "batchId" to batchId,
+                        "expiry" to expiry.text.toString(), "purchasePrice" to (pp.text.toString().toDoubleOrNull() ?: 0.0),
                         "mrp" to (mrp.text.toString().toDoubleOrNull() ?: 0.0), "qty" to q,
                         "createdAt" to FieldValue.serverTimestamp(), "createdBy" to auth.currentUser?.uid
-                    ))
-                    tx.set(stockRef, mapOf(
-                        "medicine" to med.text.toString(), "batchNo" to batch.text.toString(),
-                        "expiry" to expiry.text.toString(),
-                        "purchasePrice" to (pp.text.toString().toDoubleOrNull() ?: 0.0),
-                        "mrp" to (mrp.text.toString().toDoubleOrNull() ?: 0.0),
-                        "availableQty" to available + q,
-                        "soldQty" to (old.getDouble("soldQty") ?: 0.0),
-                        "updatedAt" to FieldValue.serverTimestamp()
+                    ), SetOptions.merge())
+                    tx.set(db.collection("stockMovements").document(purchaseRef.id), mapOf(
+                        "type" to "PURCHASE", "sourceId" to purchaseRef.id, "productId" to productId,
+                        "batchId" to batchId, "batchNumber" to batch.text.toString(), "qty" to q,
+                        "createdAt" to FieldValue.serverTimestamp()
                     ), SetOptions.merge())
                     null
                 }.addOnSuccessListener { status.text = "Purchase saved. Stock increased." }
-                 .addOnFailureListener { status.text = "Purchase failed: " + (it.message ?: "") }
+                 .addOnFailureListener { status.text = "Purchase failed: " + (it.message ?: "Permission denied") }
             }
         })
     }
-
     private fun stock() {
         page("Batch-wise Stock"); back(); status.text = "Loading live stock..."
         db.collection("stock").get().addOnSuccessListener { snap ->
