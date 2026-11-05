@@ -55,18 +55,18 @@ class MainActivity : AppCompatActivity() {
     private fun page(title: String) {
         root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(24, 24, 24, 24)
+            setPadding(20, 20, 20, 20)
         }
         val top = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         top.addView(TextView(this).apply {
-            text = title; textSize = 24f; setTextColor(0xFF126B48.toInt())
+            text = title; textSize = 30f; setTextColor(0xFF126B48.toInt()); setTypeface(null, android.graphics.Typeface.BOLD)
             layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
         })
         if (auth.currentUser != null) top.addView(Button(this).apply {
             text = "Logout"; setOnClickListener { auth.signOut(); login() }
         })
         root.addView(top)
-        status = TextView(this).apply { textSize = 13f; setPadding(0, 8, 0, 8) }
+        status = TextView(this).apply { textSize = 16f; setPadding(0, 10, 0, 12) }
         root.addView(status)
         body = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         root.addView(body, LinearLayout.LayoutParams(-1, 0, 1f))
@@ -170,7 +170,7 @@ class MainActivity : AppCompatActivity() {
                 setTextColor(0xFF50606F.toInt())
                 setPadding(2, 2, 2, 2)
                 setOnClickListener { action() }
-            }, LinearLayout.LayoutParams(0, 62, 1f))
+            }, LinearLayout.LayoutParams(0, 72, 1f))
         }
         root.addView(bottom)
 
@@ -226,7 +226,7 @@ class MainActivity : AppCompatActivity() {
         body.addView(quickButton("💾 Backup & Restore") { backupRestore() }.apply {
             setBackgroundColor(0xFF238A68.toInt())
             setTextColor(0xFFFFFFFF.toInt())
-        }, LinearLayout.LayoutParams(-1, 62).apply { topMargin = 14 })
+        }, LinearLayout.LayoutParams(-1, 72).apply { topMargin = 14 })
 
         loadDashboardStats()
     }
@@ -247,8 +247,9 @@ class MainActivity : AppCompatActivity() {
         Button(this).apply {
             this.text = text
             isAllCaps = false
-            textSize = 16f
+            textSize = 18f
             setTypeface(null, android.graphics.Typeface.BOLD)
+            minHeight = 72
             setTextColor(0xFF31516D.toInt())
             setOnClickListener { action() }
             background = android.graphics.drawable.GradientDrawable().apply {
@@ -308,7 +309,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun back() {
-        body.addView(Button(this).apply { text = "← Back"; setOnClickListener { dashboard() } })
+        body.addView(Button(this).apply { text = "←  BACK"; isAllCaps = false; textSize = 18f; setTypeface(null, android.graphics.Typeface.BOLD); minHeight = 64; setOnClickListener { dashboard() } }, LinearLayout.LayoutParams(-1, 64).apply { bottomMargin = 12 })
     }
 
     private fun billing() {
@@ -598,6 +599,7 @@ class MainActivity : AppCompatActivity() {
         val adminCollections = listOf("products","batches","bills","purchases","suppliers","customers","reminders","orders","stockMovements")
 
         page("Restore Backup")
+        back()
         val progress = TextView(this).apply {
             text = "Preparing Admin backup…"
             textSize = 17f
@@ -627,7 +629,7 @@ class MainActivity : AppCompatActivity() {
 
                         var committed = false
                         var lastError: Exception? = null
-                        for (attempt in 1..3) {
+                        for (attempt in 1..1) {
                             try {
                                 Tasks.await(batch.commit(), 45, TimeUnit.SECONDS)
                                 committed = true
