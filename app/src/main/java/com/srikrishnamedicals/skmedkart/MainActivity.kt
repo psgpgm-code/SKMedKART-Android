@@ -51,7 +51,7 @@ class MainActivity : AppCompatActivity() {
     private fun login() {
         page("SKMedKART")
         body.addView(TextView(this).apply {
-            text = "Sri Krishna Medicals • Pennagaram\\nNative Android • Live Firebase"
+            text = "Sri Krishna Medicals • Pennagaram\nNative Android • Live Firebase"
             textSize = 15f
         })
         val email = input("Staff email", 33)
@@ -83,7 +83,7 @@ class MainActivity : AppCompatActivity() {
             }
         })
         body.addView(TextView(this).apply {
-            text = "\\nSeparate app: the old SKMedKART Admin app is not modified."
+            text = "\nSeparate app: the old SKMedKART Admin app is not modified."
         })
     }
 
@@ -227,7 +227,7 @@ class MainActivity : AppCompatActivity() {
             status.text = snap.size().toString() + " stock batches"
             snap.documents.forEach { d ->
                 body.addView(TextView(this).apply {
-                    text = (d.getString("medicine") ?: "") + "\\nBatch: " + (d.getString("batchNo") ?: "") +
+                    text = (d.getString("medicine") ?: "") + "\nBatch: " + (d.getString("batchNo") ?: "") +
                         " • Exp: " + (d.getString("expiry") ?: "") + "\\nAvailable: " +
                         (d.getDouble("availableQty") ?: 0.0) + " • Sold: " + (d.getDouble("soldQty") ?: 0.0)
                     setPadding(8,10,8,10)
@@ -242,7 +242,7 @@ class MainActivity : AppCompatActivity() {
             status.text = snap.size().toString() + " records"
             snap.documents.forEach { d ->
                 body.addView(TextView(this).apply {
-                    text = (d.getString("invoiceNo") ?: d.id) + "\\n" +
+                    text = (d.getString("invoiceNo") ?: d.id) + "\n" +
                         (d.getString("medicine") ?: "") + " • Qty " + (d.getDouble("qty") ?: 0.0) +
                         " • ₹" + (d.getDouble("total") ?: d.getDouble("mrp") ?: 0.0)
                     setPadding(8,10,8,10)
@@ -275,7 +275,7 @@ class MainActivity : AppCompatActivity() {
                     status.text = snap.size().toString() + " customers"
                     snap.documents.forEach { d -> body.addView(TextView(this@MainActivity).apply {
                         text = (d.getString("name") ?: "") + " • " + (d.getString("mobile") ?: "") +
-                            "\\n" + (d.getString("medicinePlan") ?: "") + "\\n" + (d.getString("instructions") ?: "")
+                            "\\n" + (d.getString("medicinePlan") ?: "") + "\n" + (d.getString("instructions") ?: "")
                         setPadding(8,10,8,10)
                     }) }
                 }
@@ -306,9 +306,9 @@ class MainActivity : AppCompatActivity() {
             db.collection("purchases").get().addOnSuccessListener { purchases ->
                 var pq=0.0; purchases.documents.forEach { pq += it.getDouble("qty") ?: 0.0 }
                 body.addView(TextView(this).apply {
-                    text = "Bills: " + bills.size() + "\\nSales Qty: " + qty +
-                        "\\nSales Value: ₹%.2f".format(Locale.US,sales) +
-                        "\\nPurchase Entries: " + purchases.size() + "\\nPurchase Qty: " + pq
+                    text = "Bills: " + bills.size() + "\nSales Qty: " + qty +
+                        "\nSales Value: ₹%.2f".format(Locale.US,sales) +
+                        "\nPurchase Entries: " + purchases.size() + "\nPurchase Qty: " + pq
                     textSize=17f
                 })
                 status.text="Live report loaded."
