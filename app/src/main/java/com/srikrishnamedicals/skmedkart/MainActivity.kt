@@ -17,6 +17,7 @@ import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.SetOptions
 import java.util.Locale
+import java.security.MessageDigest
 import kotlin.math.round
 
 class MainActivity : AppCompatActivity() {
@@ -25,7 +26,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var root: LinearLayout
     private lateinit var body: LinearLayout
     private lateinit var status: TextView
-    private val backupCollections = listOf("products","batches","bills","purchases","suppliers","customers","reminders","orders","stockMovements")
+    private val backupCollections = listOf("products","batches","bills","purchases","suppliers","customers","reminders","orders","stockMovements","stock","h_register","meta","staff")
     private val restorePicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri == null) return@registerForActivityResult
         try {
@@ -389,17 +390,19 @@ class MainActivity : AppCompatActivity() {
         Thread {
             try {
                 var total = 0
-                for (name in backupCollections) {
-                    val rows = collections.optJSONArray(name) ?: JSONArray()
+                val names = collections.keys().asSequence().toList()
+                for (name in names) {
+                    val rows = collections.optJSONArray(name) ?: continue
                     var start = 0
                     while (start < rows.length()) {
                         val batch = db.batch()
                         val end = minOf(start + 400, rows.length())
                         for (i in start until end) {
                             val row = rows.getJSONObject(i)
-                            val id = row.optString("id").ifBlank { error("Missing document id in " + name) }
+                            val id = backupDocumentId(name, row, i)
                             val data = jsonObjectToMap(row)
-                            data.remove("id")
+                            data.remove("id"); data.remove("docId"); data.remove("documentId"); data.remove("_id")
+                            data["_originalBackupId"] = id
                             batch.set(db.collection(name).document(id), data, SetOptions.merge())
                         }
                         Tasks.await(batch.commit())
@@ -421,6 +424,27 @@ class MainActivity : AppCompatActivity() {
             }
         }.start()
     }
+
+    private fun backupDocumentId(collection: String, row: JSONObject, index: Int): String {
+        val explicit = listOf("id","docId","documentId","_id").firstNotNullOfOrNull { key ->
+            row.optString(key).takeIf { it.isNotBlank() }
+        }
+        if (explicit != null) return safeId(explicit)
+        val natural = when (collection) {
+            "customers" -> row.optString("mobile").ifBlank { row.optString("phone") }.ifBlank { row.optString("name") }
+            "products" -> row.optString("name").ifBlank { row.optString("medicine") }.ifBlank { row.optString("code") }
+            "bills" -> row.optString("invoiceNo").ifBlank { row.optString("billNo") }
+            "purchases" -> (row.optString("invoiceNo") + "_" + row.optString("batchNo")).trim('_')
+            "batches","stock" -> (row.optString("medicine") + "__" + row.optString("batchNo")).trim('_')
+            else -> ""
+        }
+        if (natural.isNotBlank()) return collection + "__" + safeId(natural)
+        val digest = MessageDigest.getInstance("SHA-256").digest(row.toString().toByteArray(Charsets.UTF_8))
+        return collection + "__" + digest.joinToString("") { "%02x".format(it) }.take(60) + "__" + index
+    }
+
+    private fun safeId(value: String): String =
+        value.trim().lowercase(Locale.US).replace(Regex("[^a-z0-9_-]"), "_").take(120)
 
     private fun jsonObjectToMap(obj: JSONObject): MutableMap<String, Any?> {
         val out = mutableMapOf<String, Any?>()
