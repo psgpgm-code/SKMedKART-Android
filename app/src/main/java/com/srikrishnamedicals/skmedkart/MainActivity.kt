@@ -591,6 +591,11 @@ class MainActivity : AppCompatActivity() {
         val root = JSONObject(backupText)
         val collections = root.optJSONObject("collections")
             ?: throw IllegalArgumentException("Invalid SKMedKART backup: collections not found")
+        if (auth.currentUser == null) throw IllegalStateException("Please login to Firebase before restoring the Admin backup.")
+
+        // This is the exact collection set produced by the existing Admin backup.
+        // Do not attempt unrelated collections from another backup format.
+        val adminCollections = listOf("products","batches","bills","purchases","suppliers","customers","reminders","orders","stockMovements")
 
         page("Restore Backup")
         val progress = TextView(this).apply {
@@ -603,46 +608,28 @@ class MainActivity : AppCompatActivity() {
         Thread {
             try {
                 var total = 0
-                val names = collections.keys().asSequence().toList()
-
-                for (name in names) {
+                for (name in adminCollections) {
                     val rows = collections.optJSONArray(name) ?: continue
+                    if (rows.length() == 0) continue
                     var start = 0
-
                     while (start < rows.length()) {
-                        val end = minOf(start + 200, rows.length())
+                        val end = minOf(start + 400, rows.length())
                         val batch = db.batch()
-
                         for (i in start until end) {
-                            val row = rows.getJSONObject(i)
+                            val row = rows.optJSONObject(i) ?: throw IllegalArgumentException("$name record ${i + 1} is not a JSON object")
                             val id = backupDocumentId(name, row, i)
-                            if (id.isBlank()) {
-                                throw IllegalArgumentException("Could not create a document ID for " + name + " record " + (i + 1))
-                            }
-
                             val data = jsonObjectToMap(row)
-                            data.remove("id")
-                            data.remove("docId")
-                            data.remove("documentId")
-                            data.remove("_id")
+                            data.remove("id"); data.remove("docId"); data.remove("documentId"); data.remove("_id")
                             data["_originalBackupId"] = id
-
-                            batch.set(
-                                db.collection(name).document(id),
-                                data,
-                                SetOptions.merge()
-                            )
+                            batch.set(db.collection(name).document(id), data, SetOptions.merge())
                         }
-
-                        runOnUiThread {
-                            progress.text = "Restoring " + name + "… " + end + "/" + rows.length() + " records"
-                        }
+                        runOnUiThread { progress.text = "Restoring $name… ${start + 1}–$end/${rows.length()} records\\nTotal restored: $total" }
 
                         var committed = false
                         var lastError: Exception? = null
                         for (attempt in 1..3) {
                             try {
-                                Tasks.await(batch.commit(), 30, TimeUnit.SECONDS)
+                                Tasks.await(batch.commit(), 45, TimeUnit.SECONDS)
                                 committed = true
                                 break
                             } catch (e: Exception) {
@@ -650,49 +637,27 @@ class MainActivity : AppCompatActivity() {
                                 if (attempt < 3) Thread.sleep(attempt * 1000L)
                             }
                         }
-                        if (!committed) {
-                            throw IllegalStateException(
-                                "Firebase write failed in " + name + " records " +
-                                    (start + 1) + "-" + end + ": " +
-                                    (lastError?.message ?: "timeout")
-                            )
-                        }
-
+                        if (!committed) throw IllegalStateException("Firebase write failed in $name records ${start + 1}-$end: ${lastError?.message ?: "timeout"}")
                         total += end - start
                         start = end
-
-                        runOnUiThread {
-                            progress.text = "Restoring " + name + "… " + start + "/" + rows.length() +
-                                " records\nTotal restored: " + total
-                        }
+                        runOnUiThread { progress.text = "Restoring $name… $start/${rows.length()} records\\nTotal restored: $total" }
                     }
-
-                    runOnUiThread {
-                        progress.text = "Completed " + name + " • " + rows.length() + " records"
-                    }
+                    runOnUiThread { progress.text = "Completed $name • ${rows.length()} records" }
                 }
-
                 runOnUiThread {
-                    status.text = "Restore completed • " + total + " records written to Firebase"
-                    body.removeAllViews()
-                    body.addView(TextView(this).apply {
-                        text = "✅ Admin backup restored successfully.\n\nAll supported offline Admin collections were copied to Firebase.\n\nExisting Admin app: unchanged."
-                        textSize = 18f
-                        setPadding(8, 16, 8, 16)
-                    })
-                    nav("View Restored Data") { restoredData() }
+                    status.text = "Restore completed • $total records written to Firebase"
+                    progress.text = "✅ Admin backup restored successfully.\\n\\nProducts, batches, bills, purchases, suppliers, customers, reminders, orders and stock movements were restored.\\n\\nExisting offline Admin app: unchanged."
                 }
             } catch (e: Exception) {
                 runOnUiThread {
-                    status.text = "Restore failed: " + (e.message ?: "Unknown Firebase error")
-                    progress.text = "❌ Restore stopped.\n\n" +
-                        (e.message ?: "Unknown Firebase error")
+                    status.text = "Restore failed: ${e.message ?: "Unknown Firebase error"}"
+                    progress.text = "❌ Restore stopped.\\n\\n${e.message ?: "Unknown Firebase error"}"
                 }
             }
         }.start()
     }
-
     private fun backupDocumentId(collection: String, row: JSONObject, index: Int): String {
+        // Preserve the original Admin document id when available.
         val explicit = listOf("id","docId","documentId","_id").firstNotNullOfOrNull { key ->
             row.optString(key).takeIf { it.isNotBlank() }
         }
@@ -700,19 +665,24 @@ class MainActivity : AppCompatActivity() {
             val cleaned = safeId(explicit)
             if (cleaned.isNotBlank()) return cleaned
         }
+
+        // Older offline records can be missing an id. Create a stable business id,
+        // then a deterministic SHA-256 fallback. No record can fail because of a
+        // missing document id.
         val natural = when (collection) {
             "customers" -> row.optString("mobile").ifBlank { row.optString("phone") }.ifBlank { row.optString("name") }
             "products" -> row.optString("name").ifBlank { row.optString("medicine") }.ifBlank { row.optString("code") }
-            "bills" -> row.optString("invoiceNo").ifBlank { row.optString("billNo") }
-            "purchases" -> (row.optString("invoiceNo") + "_" + row.optString("batchNo")).trim('_')
-            "batches","stock" -> (row.optString("medicine") + "__" + row.optString("batchNo")).trim('_')
+            "bills" -> row.optString("invoiceNumber").ifBlank { row.optString("invoiceNo") }.ifBlank { row.optString("billNo") }
+            "purchases" -> (row.optString("invoiceNo") + "_" + row.optString("batchNumber").ifBlank { row.optString("batchNo") }).trim("_")
+            "batches" -> (row.optString("productId").ifBlank { row.optString("productName") }.ifBlank { row.optString("medicine") } + "__" + row.optString("batchNumber").ifBlank { row.optString("batchNo") })
+            "suppliers" -> row.optString("name").ifBlank { row.optString("mobile") }
             else -> ""
         }
         if (natural.isNotBlank()) return collection + "__" + safeId(natural)
+
         val digest = MessageDigest.getInstance("SHA-256").digest(row.toString().toByteArray(Charsets.UTF_8))
         return collection + "__" + digest.joinToString("") { "%02x".format(it) }.take(60) + "__" + index
     }
-
     private fun safeId(value: String): String =
         value.trim().lowercase(Locale.US).replace(Regex("[^a-z0-9_-]"), "_").take(120)
 
