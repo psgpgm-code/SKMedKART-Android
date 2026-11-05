@@ -259,42 +259,50 @@ class MainActivity : AppCompatActivity() {
 
     private fun loadDashboardStats() {
         db.collection("bills").get().addOnSuccessListener { bills ->
-            val sales = bills.documents.sumOf { it.getDouble("total") ?: 0.0 }
+            val sales = bills.documents.sumOf { it.getDouble("total") ?: number(it.get("total")) }
             val salesCard = body.getChildAt(1) as? LinearLayout
             val first = salesCard?.getChildAt(0) as? TextView
-            first?.text = "🧾\nToday's Sales\n₹%.2f".format(Locale.US, sales)
-        }
-        db.collection("stock").get().addOnSuccessListener { stock ->
+            first?.text = "🧾\\nToday's Sales\\n₹%.2f".format(Locale.US, sales)
+        }.addOnFailureListener { status.text = "Firebase read failed for bills: " + (it.message ?: "Permission denied") }
+
+        // The existing Admin app keeps live stock in batches[].
+        db.collection("batches").get().addOnSuccessListener { batches ->
             val row1 = body.getChildAt(2) as? LinearLayout
             val stockCard = row1?.getChildAt(1) as? TextView
-            stockCard?.text = "📦\nStock Batches\n" + stock.size()
+            stockCard?.text = "📦\\nStock Batches\\n" + batches.size()
             var low = 0
             var expiry = 0
             val now = System.currentTimeMillis()
-            stock.documents.forEach { d ->
-                if ((d.getDouble("availableQty") ?: 0.0) <= 10.0) low++
-                val exp = d.getString("expiry") ?: ""
-                if (exp.isNotBlank()) {
-                    val parts = exp.split("/", "-")
-                    if (parts.size >= 2) {
-                        val y = parts.last().toIntOrNull()
-                        val m = parts.first().toIntOrNull()
-                        if (y != null && m != null) {
-                            val year = if (y < 100) 2000 + y else y
-                            val cal = java.util.Calendar.getInstance().apply {
-                                set(year, m - 1, 1, 0, 0, 0); set(java.util.Calendar.MILLISECOND, 0)
-                            }
-                            if (cal.timeInMillis <= now + 90L * 24 * 60 * 60 * 1000) expiry++
-                        }
-                    }
-                }
+            batches.documents.forEach { d ->
+                val stock = number(d.get("stock"))
+                val minQty = number(d.get("minQty")).let { if (it > 0) it else 10.0 }
+                if (stock <= minQty) low++
+                val exp = d.getString("expiry") ?: d.getString("expiryDate") ?: ""
+                if (exp.isNotBlank() && expiryMillis(exp) <= now + 90L * 24 * 60 * 60 * 1000) expiry++
             }
             val row2 = body.getChildAt(4) as? LinearLayout
-            (row2?.getChildAt(0) as? TextView)?.text = "⚠️\nLow Stock\n" + low
-            (row2?.getChildAt(1) as? TextView)?.text = "⏰\nExpiry Alerts\n" + expiry
-        }
+            (row2?.getChildAt(0) as? TextView)?.text = "⚠️\\nLow Stock\\n" + low
+            (row2?.getChildAt(1) as? TextView)?.text = "⏰\\nExpiry Alerts\\n" + expiry
+        }.addOnFailureListener { status.text = "Firebase read failed for batches: " + (it.message ?: "Permission denied") }
     }
 
+    private fun expiryMillis(value: String): Long {
+        val p = value.trim().replace("-", "/").split("/")
+        if (p.size < 2) return Long.MAX_VALUE
+        val m = p[0].toIntOrNull() ?: return Long.MAX_VALUE
+        val y0 = p[1].toIntOrNull() ?: return Long.MAX_VALUE
+        val y = if (y0 < 100) 2000 + y0 else y0
+        return java.util.Calendar.getInstance().apply {
+            set(y, m - 1, 1, 0, 0, 0)
+            set(java.util.Calendar.MILLISECOND, 0)
+        }.timeInMillis
+    }
+
+    private fun number(value: Any?): Double = when (value) {
+        is Number -> value.toDouble()
+        is String -> value.toDoubleOrNull() ?: 0.0
+        else -> 0.0
+    }
     private fun nav(text: String, action: () -> Unit) {
         body.addView(Button(this).apply { this.text = text; isAllCaps = false; setOnClickListener { action() } })
     }
