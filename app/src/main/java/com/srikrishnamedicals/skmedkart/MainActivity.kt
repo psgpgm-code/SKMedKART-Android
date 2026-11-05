@@ -18,6 +18,7 @@ import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.SetOptions
 import java.util.Locale
 import java.security.MessageDigest
+import java.util.concurrent.TimeUnit
 import kotlin.math.round
 
 class MainActivity : AppCompatActivity() {
@@ -546,45 +547,103 @@ class MainActivity : AppCompatActivity() {
         val root = JSONObject(backupText)
         val collections = root.optJSONObject("collections")
             ?: throw IllegalArgumentException("Invalid SKMedKART backup: collections not found")
+
         page("Restore Backup")
-        body.addView(TextView(this).apply {
-            text = "Restoring Admin backup into Firebase…\nPlease keep the app open until completion."
+        val progress = TextView(this).apply {
+            text = "Preparing Admin backup…"
             textSize = 17f
-        })
+            setPadding(8, 8, 8, 16)
+        }
+        body.addView(progress)
+
         Thread {
             try {
                 var total = 0
                 val names = collections.keys().asSequence().toList()
+
                 for (name in names) {
                     val rows = collections.optJSONArray(name) ?: continue
                     var start = 0
+
                     while (start < rows.length()) {
+                        val end = minOf(start + 200, rows.length())
                         val batch = db.batch()
-                        val end = minOf(start + 400, rows.length())
+
                         for (i in start until end) {
                             val row = rows.getJSONObject(i)
                             val id = backupDocumentId(name, row, i)
+                            if (id.isBlank()) {
+                                throw IllegalArgumentException("Could not create a document ID for " + name + " record " + (i + 1))
+                            }
+
                             val data = jsonObjectToMap(row)
-                            data.remove("id"); data.remove("docId"); data.remove("documentId"); data.remove("_id")
+                            data.remove("id")
+                            data.remove("docId")
+                            data.remove("documentId")
+                            data.remove("_id")
                             data["_originalBackupId"] = id
-                            batch.set(db.collection(name).document(id), data, SetOptions.merge())
+
+                            batch.set(
+                                db.collection(name).document(id),
+                                data,
+                                SetOptions.merge()
+                            )
                         }
-                        Tasks.await(batch.commit())
+
+                        runOnUiThread {
+                            progress.text = "Restoring " + name + "… " + end + "/" + rows.length() + " records"
+                        }
+
+                        var committed = false
+                        var lastError: Exception? = null
+                        for (attempt in 1..3) {
+                            try {
+                                Tasks.await(batch.commit(), 30, TimeUnit.SECONDS)
+                                committed = true
+                                break
+                            } catch (e: Exception) {
+                                lastError = e
+                                if (attempt < 3) Thread.sleep(attempt * 1000L)
+                            }
+                        }
+                        if (!committed) {
+                            throw IllegalStateException(
+                                "Firebase write failed in " + name + " records " +
+                                    (start + 1) + "-" + end + ": " +
+                                    (lastError?.message ?: "timeout")
+                            )
+                        }
+
                         total += end - start
                         start = end
+
+                        runOnUiThread {
+                            progress.text = "Restoring " + name + "… " + start + "/" + rows.length() +
+                                " records\nTotal restored: " + total
+                        }
+                    }
+
+                    runOnUiThread {
+                        progress.text = "Completed " + name + " • " + rows.length() + " records"
                     }
                 }
+
                 runOnUiThread {
                     status.text = "Restore completed • " + total + " records written to Firebase"
                     body.removeAllViews()
                     body.addView(TextView(this).apply {
                         text = "✅ Admin backup restored successfully.\n\nAll supported offline Admin collections were copied to Firebase.\n\nExisting Admin app: unchanged."
-                        textSize = 18f; setPadding(8, 16, 8, 16)
+                        textSize = 18f
+                        setPadding(8, 16, 8, 16)
                     })
                     nav("View Restored Data") { restoredData() }
                 }
             } catch (e: Exception) {
-                runOnUiThread { status.text = "Restore failed: " + (e.message ?: "Unknown Firebase error") }
+                runOnUiThread {
+                    status.text = "Restore failed: " + (e.message ?: "Unknown Firebase error")
+                    progress.text = "❌ Restore stopped.\n\n" +
+                        (e.message ?: "Unknown Firebase error")
+                }
             }
         }.start()
     }
@@ -593,7 +652,10 @@ class MainActivity : AppCompatActivity() {
         val explicit = listOf("id","docId","documentId","_id").firstNotNullOfOrNull { key ->
             row.optString(key).takeIf { it.isNotBlank() }
         }
-        if (explicit != null) return safeId(explicit)
+        if (explicit != null) {
+            val cleaned = safeId(explicit)
+            if (cleaned.isNotBlank()) return cleaned
+        }
         val natural = when (collection) {
             "customers" -> row.optString("mobile").ifBlank { row.optString("phone") }.ifBlank { row.optString("name") }
             "products" -> row.optString("name").ifBlank { row.optString("medicine") }.ifBlank { row.optString("code") }
