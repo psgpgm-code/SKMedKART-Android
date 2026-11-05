@@ -313,19 +313,21 @@ class MainActivity : AppCompatActivity() {
 
     private fun billing() {
         page("Billing"); back()
-        val customer = input("Customer name")
+        val customer = input("Customer name / Walk-in")
         val mobile = input("Mobile number", 2)
-        val medicine = input("Medicine")
+        val doctor = input("🩺 Prescribed by / Doctor name")
+        val medicine = input("🔍 Search medicine")
         val batch = input("Batch No")
         val expiry = input("Expiry MM/YYYY")
         val qty = input("Quantity", 2)
         val price = input("Selling price / MRP", 8194)
-        val discount = input("Discount %", 8194)
+        val discount = input("Discount ₹", 8194)
         val gst = input("GST %", 8194)
         val payment = input("Payment mode")
-        listOf(customer,mobile,medicine,batch,expiry,qty,price,discount,gst,payment).forEach { body.addView(it) }
+
+        listOf(customer, mobile, doctor, medicine, batch, expiry, qty, price, discount, gst, payment).forEach { body.addView(it) }
         body.addView(Button(this).apply {
-            text = "Save Bill"
+            text = "SAVE BILL"
             setOnClickListener {
                 val q = qty.text.toString().toDoubleOrNull() ?: 0.0
                 val p = price.text.toString().toDoubleOrNull() ?: 0.0
@@ -335,47 +337,62 @@ class MainActivity : AppCompatActivity() {
                     status.text = "Medicine, batch and quantity are required."; return@setOnClickListener
                 }
                 val subtotal = q * p
-                val afterDiscount = subtotal - subtotal * d / 100.0
-                val total = afterDiscount + afterDiscount * g / 100.0
-                val net = round(total)
-                status.text = "Total ₹%.2f • Round off ₹%.2f • Net ₹%.0f".format(Locale.US, total, net-total, net)
-                saveBill(customer.text.toString(), mobile.text.toString(), medicine.text.toString(),
-                    batch.text.toString(), expiry.text.toString(), q, p, d, g, payment.text.toString(), net)
+                val taxable = subtotal - d
+                val tax = taxable * g / 100.0
+                val total = taxable + tax
+                val rounded = round(total)
+                status.text = "Total ₹%.2f • Round off ₹%.2f • Net ₹%.0f".format(Locale.US, total, rounded-total, rounded)
+                saveBill(customer.text.toString(), mobile.text.toString(), doctor.text.toString(), medicine.text.toString(),
+                    batch.text.toString(), expiry.text.toString(), q, p, d, g, payment.text.toString(), rounded)
             }
         })
     }
 
-    private fun saveBill(customer:String, mobile:String, med:String, batch:String, expiry:String,
+    private fun saveBill(customer:String, mobile:String, doctor:String, med:String, batchNo:String, expiry:String,
                          qty:Double, price:Double, discount:Double, gst:Double, payment:String, total:Double) {
-        status.text = "Saving bill..."
-        val counter = db.collection("meta").document("counters")
-        db.runTransaction { tx ->
-            val c = tx.get(counter)
-            val no = (c.getLong("invoice") ?: 0L) + 1L
-            tx.set(counter, mapOf("invoice" to no), SetOptions.merge())
-            val bill = db.collection("bills").document()
-            tx.set(bill, mapOf(
-                "invoiceNo" to "SKM-%03d".format(no),
-                "customerName" to customer, "mobile" to mobile, "medicine" to med,
-                "batchNo" to batch, "expiry" to expiry, "qty" to qty, "price" to price,
-                "discountPercent" to discount, "gstPercent" to gst, "total" to total,
-                "paymentMode" to payment, "createdAt" to FieldValue.serverTimestamp(),
-                "createdBy" to auth.currentUser?.uid
-            ))
-            val s = db.collection("stock").document(stockId(med,batch))
-            val old = tx.get(s)
-            val available = old.getDouble("availableQty") ?: 0.0
-            if (available < qty) throw IllegalStateException("Insufficient stock. Available: " + available)
-            tx.update(s, mapOf(
-                "availableQty" to available - qty,
-                "soldQty" to (old.getDouble("soldQty") ?: 0.0) + qty,
-                "updatedAt" to FieldValue.serverTimestamp()
-            ))
-            null
-        }.addOnSuccessListener { status.text = "Bill saved successfully." }
-         .addOnFailureListener { status.text = "Bill not saved: " + (it.message ?: "") }
+        status.text = "Saving bill to Firebase..."
+        db.collection("batches").get().addOnSuccessListener { snap ->
+            val match = snap.documents.firstOrNull { d ->
+                val name = d.getString("productName") ?: d.getString("medicine") ?: ""
+                val bn = d.getString("batchNumber") ?: d.getString("batchNo") ?: ""
+                name.equals(med.trim(), true) && bn.equals(batchNo.trim(), true)
+            }
+            if (match == null) {
+                status.text = "Batch not found. Please use the exact medicine + batch from Stock."
+                return@addOnSuccessListener
+            }
+            val batchRef = match.reference
+            val counter = db.collection("meta").document("counters")
+            db.runTransaction { tx ->
+                val batchSnap = tx.get(batchRef)
+                if (!batchSnap.exists()) throw IllegalStateException("Batch not found.")
+                val available = number(batchSnap.get("stock"))
+                if (available < qty) throw IllegalStateException("Insufficient stock. Available: $available")
+                val c = tx.get(counter)
+                val no = (c.getLong("invoice") ?: 0L) + 1L
+                tx.set(counter, mapOf("invoice" to no), SetOptions.merge())
+                val invoice = "SKM-%03d".format(no)
+                val billRef = db.collection("bills").document(invoice)
+                tx.set(billRef, mapOf(
+                    "id" to invoice, "invoiceNumber" to invoice, "invoiceNo" to invoice,
+                    "customerName" to customer, "mobile" to mobile, "doctor" to doctor,
+                    "items" to listOf(mapOf(
+                        "productId" to (batchSnap.getString("productId") ?: ""),
+                        "batchId" to batchRef.id, "name" to med, "batchNumber" to batchNo,
+                        "expiry" to expiry, "qty" to qty, "quantity" to qty,
+                        "unitPrice" to price, "price" to price
+                    )),
+                    "subtotal" to qty * price, "discount" to discount, "gst" to gst,
+                    "total" to total, "paymentMode" to payment,
+                    "createdAt" to FieldValue.serverTimestamp(),
+                    "createdBy" to auth.currentUser?.uid
+                ), SetOptions.merge())
+                tx.update(batchRef, mapOf("stock" to available - qty, "updatedAt" to FieldValue.serverTimestamp()))
+                null
+            }.addOnSuccessListener { status.text = "Bill saved successfully." }
+             .addOnFailureListener { status.text = "Bill not saved: " + (it.message ?: "Permission denied") }
+        }.addOnFailureListener { status.text = "Batch lookup failed: " + (it.message ?: "Permission denied") }
     }
-
     private fun purchase() {
         page("Purchase Entry"); back()
         val supplier = input("Supplier")
