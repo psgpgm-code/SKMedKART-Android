@@ -6,6 +6,7 @@ import android.widget.*
 import androidx.activity.result.contract.ActivityResultContracts
 import com.google.firebase.FirebaseApp
 import com.google.firebase.FirebaseOptions
+import com.google.android.gms.tasks.Tasks
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
@@ -376,8 +377,8 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun restoreAdminBackup(text: String) {
-        val root = JSONObject(text)
+    private fun restoreAdminBackup(backupText: String) {
+        val root = JSONObject(backupText)
         val collections = root.optJSONObject("collections")
             ?: throw IllegalArgumentException("Invalid SKMedKART backup: collections not found")
         page("Restore Backup")
@@ -401,7 +402,7 @@ class MainActivity : AppCompatActivity() {
                             data.remove("id")
                             batch.set(db.collection(name).document(id), data, SetOptions.merge())
                         }
-                        batch.commit().get()
+                        Tasks.await(batch.commit())
                         total += end - start
                         start = end
                     }
