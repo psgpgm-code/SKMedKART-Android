@@ -1,4 +1,5 @@
 name: Build SKMedKART Android Firebase
+# Android-only build workflow. This repository is isolated from SKMedKART-Admin.
 
 on:
   push:
