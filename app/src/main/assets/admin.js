@@ -16,7 +16,7 @@ const BUILTIN_FIREBASE_CONFIG={apiKey:'AIzaSyBdvOUiTVoBJHPE418iZqNzYftiN9yjooA',
 const externalCfg=window.SKMED_FIREBASE_CONFIG||{};
 const cfg=(externalCfg&&externalCfg.projectId&&!String(externalCfg.projectId).startsWith('PASTE_'))?externalCfg:BUILTIN_FIREBASE_CONFIG;
 const admins=window.SKMED_ADMIN_EMAILS||[];
-const configured=true; // V5.9.52 FINAL: local-first production mode. Firebase is intentionally disabled for Billing, Purchase, Stock and Sync. No quota/network dependency.
+const configured=true; // ANDROID FIREBASE BUILD: Firebase is enabled only in this Android copy. The original SKMedKART-Admin remains offline/local-first.
 // Supabase public catalogue mirror ONLY. Existing local billing/stock/purchase data stays unchanged.
 const SKM_SUPABASE_URL='https://uyobhzkcvfnrioppwkrv.supabase.co';
 const SKM_SUPABASE_PUBLISHABLE_KEY='sb_publishable_5zmngPN80O2CPgtNhGNhEQ_elEQpz9E';
@@ -165,7 +165,7 @@ function recoverMissingLocalReminders(){
 }
 
 const t=v=>v?.toDate?v.toDate().getTime():new Date(v||0).getTime(); const today=()=>new Date().toISOString().slice(0,10); const money=n=>'₹'+Number(n||0).toFixed(2); const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,7);
-$('notice').innerHTML='<b>📱 Offline + Billing Safe mode</b><br><span class="small">Bills, purchases and stock are saved safely on this phone. Firebase is not used, so quota errors will not affect billing.</span>';
+$('notice').innerHTML='<b>☁️ Firebase Connected Android</b><br><span class="small">This Android version uses Firebase for login, cloud data and live sync. The original SKMedKART Admin app remains offline/local-first.</span>';
 function loginMessage(text,type='info'){const el=$('loginMessage');if(!el)return;el.textContent=text;el.className='loginMessage '+type}
 function clearLoginMessage(){const el=$('loginMessage');if(el){el.textContent='';el.className='loginMessage hidden'}}
 function normalizeEmail(v){return String(v||'').trim().toLowerCase()}
@@ -245,11 +245,11 @@ window.adminLogout=()=>{
 ['email','password'].forEach(id=>$(id)?.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();window.adminLogin()}}));
 for(const b of document.querySelectorAll('.tab'))b.onclick=()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));b.classList.add('active');document.querySelectorAll('.view').forEach(x=>x.classList.add('hidden'));$(b.dataset.view).classList.remove('hidden')};for(const b of document.querySelectorAll('.payBtn'))b.onclick=()=>{document.querySelectorAll('.payBtn').forEach(x=>x.classList.remove('active'));b.classList.add('active');$('bPayment').value=b.dataset.pay};
 async function migrateFirebaseOnce(){
-  // V5.9.52: cloud migration is permanently disabled. This prevents stale Firebase
-  // orders/products/stock from being re-imported into the local pharmacy database.
+  // Android Firebase mode: existing local data is preserved while the live Firebase
+  // listeners provide the cloud source of truth. Do not run the old offline snapshot migration.
   const n=$('notice');
-  if(n)n.innerHTML='<b>📱 Hybrid Local-Safe mode</b><br><span class="small">Billing, purchases, stock, reminders and history run locally. Firebase cloud migration is disabled, so old cloud data cannot be injected or consume quota.</span>';
-  return {done:true,skipped:true,disabled:true};
+  if(n)n.innerHTML='<b>☁️ Firebase Connected Android</b><br><span class="small">Firebase login, cloud data and live sync are enabled in this Android version.</span>';
+  return {done:true,skipped:true,disabled:false};
 }
 window.migrateFirebaseOnce=migrateFirebaseOnce;
 
@@ -848,7 +848,7 @@ window.downloadBackup=async()=>{try{const status=$('restoreStatus');if(status)st
 async function restoreData(data){
  if(!data?.collections||typeof data.collections!=='object')throw Error('Invalid SKMedKART backup file.');
  if(configured){
-  for(const name of backupCollections){const rows=Array.isArray(data.collections[name])?data.collections[name]:[];for(let i=0;i<rows.length;i+=400){const wb=writeBatch(db);rows.slice(i,i+400).forEach(row=>{const copy={...row};const id=String(copy.id||uid());delete copy.id;wb.set(doc(db,name,id),copy,{merge:true});});await wb.commit();}}
+  for(const name of backupCollections){const rows=Array.isArray(data.collections[name])?data.collections[name]:[];for(let i=0;i<rows.length;i+=100){const wb=writeBatch(db);rows.slice(i,i+400).forEach(row=>{const copy={...row};const id=String(copy.id||uid());delete copy.id;wb.set(doc(db,name,id),copy,{merge:true});});await wb.commit();}}
  }else{
   // Restore is a snapshot: the selected backup is loaded exactly as saved. We do
   // not subtract "duplicate" purchases from the snapshot, because that can turn a
