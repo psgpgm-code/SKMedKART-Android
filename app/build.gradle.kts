@@ -17,17 +17,14 @@ dependencies {
  implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.9.0")
 }
 
-val prepareSkmedkartIcon = tasks.register("prepareSkmedkartIcon") {
-    val source = file("src/main/icon-source/skmedkart_icon.jpg.b64")
-    val target = file("src/main/res/drawable/skmedkart_icon.jpg")
-    inputs.file(source)
-    outputs.file(target)
+tasks.register("prepareSkmedkartIcon") {
     doLast {
+        val source = project.file("src/main/icon-source/skmedkart_icon.jpg.b64")
+        val target = project.file("src/main/res/drawable/skmedkart_icon.jpg")
         target.parentFile.mkdirs()
         target.writeBytes(java.util.Base64.getDecoder().decode(source.readText().trim()))
     }
 }
-
-tasks.named("preBuild").configure {
-    dependsOn(prepareSkmedkartIcon)
+tasks.named("preBuild") {
+    dependsOn("prepareSkmedkartIcon")
 }
