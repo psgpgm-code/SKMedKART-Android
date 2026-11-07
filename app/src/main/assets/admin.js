@@ -725,8 +725,21 @@ window.saveBill=async()=>{
 };
 
 function assetDataUrl(path){return fetch(path).then(r=>r.ok?r.blob():Promise.reject(new Error('Asset not found: '+path))).then(blob=>new Promise((res,rej)=>{const fr=new FileReader();fr.onload=()=>res(fr.result);fr.onerror=rej;fr.readAsDataURL(blob)}))}
+function assetB64DataUrl(path,mime='image/jpeg'){return fetch(path).then(r=>r.ok?r.text():Promise.reject(new Error('Asset not found: '+path))).then(text=>'data:'+mime+';base64,'+String(text||'').replace(/\\s+/g,'')).catch(()=> 'data:image/svg+xml;charset=utf-8,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"></svg>'))}
 let __invoiceAssetsPromise=null;
-function invoiceAssets(){if(!__invoiceAssetsPromise)__invoiceAssetsPromise=Promise.all([assetDataUrl('./invoice-top-logo.png'),assetDataUrl('./invoice-footer-logo.jpg'),assetDataUrl('./pharmacist_signature.jpg')]).then(([topLogo,footerLogo,signature])=>({topLogo,footerLogo,signature}));return __invoiceAssetsPromise}
+function invoiceAssets(){
+ if(!__invoiceAssetsPromise){
+   __invoiceAssetsPromise=assetB64DataUrl('./skmedkart_icon.jpg.b64').then(icon=>{
+     const blank='data:image/svg+xml;charset=utf-8,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"></svg>');
+     return Promise.all([
+       assetDataUrl('./invoice-top-logo.png').catch(()=>icon),
+       assetDataUrl('./invoice-footer-logo.jpg').catch(()=>icon),
+       assetDataUrl('./pharmacist_signature.jpg').catch(()=>blank)
+     ]).then(([topLogo,footerLogo,signature])=>({topLogo,footerLogo,signature}));
+   });
+ }
+ return __invoiceAssetsPromise;
+}
 function shopHeaderHtml(topLogo=''){return '<div class="invHeader"><div class="invBrand">'+(topLogo?'<img src="'+topLogo+'" class="invTopLogo" alt="Sri Krishna Medicals">':'')+'<div><div class="invShop">Sri Krishna Medicals</div><div>Kaveri Road, Pennagaram,<br>Dharmapuri District, Tamil Nadu - 636 810</div><div>Phone: <b>8300363317</b></div><div>Drug Licence No: TN/DPI/01386/2021</div><div>FSSAI Licence No: 22422039000512</div></div></div><div class="invMeta"><div class="invNo">Invoice '+esc(arguments.length>1?arguments[1]:'')+'</div></div></div>'}
 function invoiceCss(){return '<style>@page{size:A4;margin:8mm}*{box-sizing:border-box}body{font-family:Arial,Helvetica,sans-serif;color:#12233f;margin:0;background:#fff}.invoicePage{width:100%;max-width:794px;margin:0 auto;border:1.5px solid #0b5aa6;padding:18px 18px 0;background:#fff}.invHeader{display:flex;justify-content:space-between;gap:16px;border-bottom:1px solid #1b5f9f;padding-bottom:12px}.invBrand{display:flex;gap:12px;align-items:flex-start;font-size:13px;line-height:1.45}.invTopLogo{width:105px;height:105px;object-fit:contain}.invShop{font-size:27px;font-weight:800;color:#123f7c;margin-bottom:3px}.invMeta{min-width:245px}.invNo{background:#dff0ff;color:#123f7c;font-size:22px;font-weight:800;border-radius:8px;padding:10px 14px;text-align:center}.metaGrid{display:grid;grid-template-columns:90px minmax(0,1fr);gap:4px 7px;margin-top:9px;font-size:13px;color:#222}.metaGrid span{min-width:0;overflow-wrap:anywhere;word-break:break-word}.items{width:100%;border-collapse:collapse;margin-top:15px;font-size:12px}.items th{background:#dff0ff;color:#123f7c;font-weight:800}.items th,.items td{border:1px solid #333;padding:7px 6px}.items th:nth-child(1){width:7%}.items th:nth-child(2){width:27%}.items th:nth-child(3){width:17%}.items th:nth-child(4){width:17%}.items th:nth-child(5){width:8%}.items th:nth-child(6){width:12%}.items th:nth-child(7){width:12%}.r{text-align:right}.c{text-align:center}.bottomRow{display:flex;justify-content:space-between;gap:20px;margin-top:10px;align-items:flex-start}.totals{width:55%;font-size:14px;line-height:1.65;color:#222}.grand{background:#dff0ff;color:#123f7c;border-radius:7px;padding:5px 8px;font-size:19px;font-weight:800;margin-top:3px}.pay{font-size:14px;color:#222;margin-top:7px;line-height:1.5}.sig{width:38%;text-align:center;align-self:flex-end}.sig img{width:155px;height:78px;object-fit:contain;display:block;margin:0 auto -2px}.sigline{border-top:1px solid #333;width:180px;margin:0 auto}.siglabel{font-size:12px;color:#222;margin-top:4px}.footer{margin:10px -18px 0;border-top:2px solid #0b5aa6;background:#eef8ff;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:5px 10px;font-size:11px;color:#124a82}.footerText{display:flex;align-items:center;gap:7px;flex:1;padding-left:6px;min-width:0;overflow:visible}.wa{font-weight:800}.footerLogo{width:150px;height:43px;object-fit:contain;border-radius:7px}.thanks{font-weight:700}.note{margin-top:2px}@media print{body{background:#fff}.invoicePage{border:0;max-width:none;padding:0}.footer{margin-top:10px}}</style>'}
 function findBill(id){const key=String(id??'');return bills.find(b=>String(b.id??'')===key||String(b.invoiceNumber??'')===key)||null}
@@ -875,20 +888,26 @@ function billRow(b,compact=false){const id=esc(b.id||b.invoiceNumber),returned=b
 window.showBillActions=b=>{setTimeout(()=>{alert('Bill saved successfully. You can now Print, Save PDF or Share it from Recent Bills.')},100)};
 window.saveSupplier=async()=>{const name=$('sName').value.trim(),mobile=$('sMobile').value.trim(),address=$('sAddress').value.trim(),gst=$('sGst').value.trim();if(!name)return alert('Enter supplier/company name.');try{if(configured){const id=String(name).toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_|_$/g,'')||uid();await setDoc(doc(db,'suppliers',id),{name,mobile,address,gst,updatedAt:serverTimestamp(),createdAt:serverTimestamp()},{merge:true})}else{const i=suppliers.findIndex(x=>x.name.toLowerCase()===name.toLowerCase());const local={id:'S'+Date.now(),name,mobile,address,gst};if(i>=0)suppliers[i]=local;else suppliers.unshift(local);set('suppliers',suppliers)}alert('Supplier saved.');['sName','sMobile','sAddress','sGst'].forEach(id=>$(id).value='');renderAll()}catch(e){alert('Could not save supplier: '+e.message)}};function renderSuppliers(){const el=$('supplierList');if(!el)return;el.innerHTML=suppliers.map(x=>'<div class="itemrow"><b>'+esc(x.name)+'</b><br><span class="small">'+esc(x.mobile||'')+(x.address?' • '+esc(x.address):'')+(x.gst?' • GST: '+esc(x.gst):'')+'</span></div>').join('')||'<div class="small">No suppliers saved yet.</div>'}
 const DELETE_DATA_PASSWORD_KEY='skm_android_delete_password_v1';
-const DELETE_DATA_CONFIRM_CODE='DELETE-SKM-DATA';
+window.createDeletePassword=()=>{
+ const first=String(prompt('Create a Delete Password. This password will be required before deleting app data.')||'').trim();
+ if(!first)return;
+ const second=String(prompt('Re-enter the Delete Password to confirm.')||'').trim();
+ if(first!==second)return alert('Passwords do not match.');
+ try{
+   localStorage.setItem(DELETE_DATA_PASSWORD_KEY,first);
+   const input=$('deleteDataPassword');if(input)input.value='';
+   const status=$('deleteDataStatus');if(status)status.textContent='Delete password created successfully.';
+   alert('Delete password created successfully.');
+ }catch(e){alert('Could not save delete password: '+e.message)}
+};
 window.deleteAllAppData=async()=>{
  const pw=String($('deleteDataPassword')?.value||'').trim();
- const code=String($('deleteDataCode')?.value||'').trim().toUpperCase();
  const status=$('deleteDataStatus');
  if(!pw)return alert('Enter the Delete Password first.');
- if(!code)return alert('Enter the Confirmation Code first.');
  let saved='';
  try{saved=localStorage.getItem(DELETE_DATA_PASSWORD_KEY)||''}catch{}
- if(!saved){
-   try{localStorage.setItem(DELETE_DATA_PASSWORD_KEY,pw);saved=pw}catch(e){return alert('Could not save delete password: '+e.message)}
- }
+ if(!saved)return alert('Delete password is not created yet. Tap "Create Delete Password" first.');
  if(saved!==pw)return alert('Incorrect Delete Password.');
- if(code!==DELETE_DATA_CONFIRM_CODE)return alert('Incorrect Confirmation Code.');
  if(!confirm('FINAL CONFIRMATION: Delete ALL Firebase app data? This cannot be undone.'))return;
  try{
    if(status)status.textContent='Deleting Firebase data...';
@@ -1332,7 +1351,7 @@ function rebuildStockIndexes(){
     for(const b of (byPid.get(pid)||[])){if(!seen.has(String(b.id??''))){seen.add(String(b.id??''));related.push(b)}}
     if(name) for(const b of (byName.get(name)||[])){if(!seen.has(String(b.id??''))){seen.add(String(b.id??''));related.push(b)}}
     stockBatchMap.set(pid,related);
-    stockExpiryMap.set(pid,related.some(b=>['EXPIRED','NEAR EXPIRY'].includes(expiryStatus(b))));
+    stockExpiryMap.set(pid,related.some(b=>Number(b?.stock||0)>0&&['EXPIRED','NEAR EXPIRY'].includes(expiryStatus(b))));
     stockSearchIndex.push({p,text:([p.name,p.barcode,p.cat].join(' ')+' '+related.map(b=>[b.batchNumber,b.expiryDate].join(' ')).join(' ')).toLowerCase()});
   }
 }
