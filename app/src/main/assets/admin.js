@@ -959,7 +959,7 @@ window.deleteAllAppData=async()=>{
  }
 };
 
-const backupCollections=const backupCollections=['products','batches','bills','purchases','suppliers','customers','reminders','orders','stockMovements'];
+const backupCollections=['products','batches','bills','purchases','suppliers','customers','reminders','orders','stockMovements'];
 async function backupData(){
  const out={app:'SKMedKART Admin Portal',version:'5.6',createdAt:new Date().toISOString(),mode:configured?'firebase':'demo',collections:{}};
  if(configured){for(const name of backupCollections){const snap=await getDocs(collection(db,name));out.collections[name]=snap.docs.map(d=>({id:d.id,...d.data()}));}}
@@ -1016,7 +1016,7 @@ $('restoreFile')?.addEventListener('change',async e=>{
  }finally{e.target.value=''}
 });
 
-window.calculatePurchaseGstwindow.calculatePurchaseGst=()=>{
+window.calculatePurchaseGst=()=>{
   const base=Math.max(0,Number($('puCost')?.value)||0);
   const rate=Math.max(0,Number($('puGst')?.value)||0);
   const total=base+(base*rate/100);
@@ -1244,7 +1244,7 @@ window.returnToSupplier=async id=>{
  }catch(e){alert('Return to supplier failed: '+(e?.message||'Unknown error'))}
 };
 
-window.deletePurchase=async id=>{window.deletePurchase=async id=>{
+window.deletePurchase=async id=>{
  const purchase=purchases.find(x=>String(x.id)===String(id));
  if(!purchase)return alert('Purchase record not found.');
  const product=products.find(x=>String(x.id)===String(purchase.productId));
