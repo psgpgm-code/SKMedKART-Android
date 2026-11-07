@@ -967,9 +967,23 @@ async function backupData(){
  return out;
 }
 window.downloadBackup=async()=>{try{const status=$('restoreStatus');if(status)status.textContent='Preparing backup...';const data=await backupData();const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='SKMedKART_BACKUP_'+today()+'_'+Date.now()+'.json';document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},500);if(status)status.textContent='Backup downloaded successfully.';}catch(e){alert('Backup failed: '+e.message)}};
-async function commitFirestoreBatchWithTimeout(batch,timeoutMs=20000){
- const timeout=new Promise((_,reject)=>setTimeout(()=>reject(new Error('Firebase restore timed out. Please check the internet connection and try again.')),timeoutMs));
- return Promise.race([batch.commit(),timeout]);
+async function commitFirestoreBatchWithRetry(batchFactory,timeoutMs=60000,maxAttempts=3){
+ let lastError=null;
+ for(let attempt=1;attempt<=maxAttempts;attempt++){
+  const batch=batchFactory();
+  try{
+   const commitPromise=batch.commit();
+   const timeout=new Promise((_,reject)=>setTimeout(()=>reject(new Error('Firebase restore batch timeout')),timeoutMs));
+   await Promise.race([commitPromise,timeout]);
+   return;
+  }catch(e){
+   lastError=e;
+   if(attempt<maxAttempts){
+    await new Promise(resolve=>setTimeout(resolve,1500*attempt));
+   }
+  }
+ }
+ throw new Error('Firebase restore could not complete this batch after '+maxAttempts+' attempts. Please check the internet connection and try again.');
 }
 async function restoreData(data){
  if(!data?.collections||typeof data.collections!=='object')throw Error('Invalid SKMedKART backup file.');
@@ -985,15 +999,18 @@ async function restoreData(data){
     if(status)status.textContent='Restoring '+name+'... 0/'+rows.length+' ('+done+'/'+total+' total)';
     for(let i=0;i<rows.length;i+=100){
       if(!navigator.onLine)throw Error('Internet connection was lost during restore.');
-      const wb=writeBatch(db);
       const chunk=rows.slice(i,i+100);
-      chunk.forEach(row=>{
-        const copy={...row};
-        const id=String(copy.id||uid());
-        delete copy.id;
-        wb.set(doc(db,name,id),copy,{merge:true});
-      });
-      await commitFirestoreBatchWithTimeout(wb,20000);
+      const buildBatch=()=>{
+        const wb=writeBatch(db);
+        chunk.forEach(row=>{
+          const copy={...row};
+          const id=String(copy.id||uid());
+          delete copy.id;
+          wb.set(doc(db,name,id),copy,{merge:true});
+        });
+        return wb;
+      };
+      await commitFirestoreBatchWithRetry(buildBatch,60000,3);
       done+=chunk.length;
       if(status)status.textContent='Restoring '+name+'... '+Math.min(i+chunk.length,rows.length)+'/'+rows.length+' ('+done+'/'+total+' total)';
       await new Promise(requestAnimationFrame);
