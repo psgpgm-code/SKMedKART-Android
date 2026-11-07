@@ -989,6 +989,34 @@ async function restoreData(data){
       if(status)status.textContent='Restoring '+name+'... '+done+'/'+total;
     }
   }
+
+  // IMPORTANT: Restore must refresh the same in-memory collections used by
+  // Dashboard/Stock/Billing. Do not rely only on the asynchronous onSnapshot
+  // listeners after a large batch restore; otherwise the UI can temporarily
+  // render zero records even though Firestore already contains the restored data.
+  const restored={};
+  for(const name of backupCollections){
+    const snap=await getDocs(collection(db,name));
+    restored[name]=snap.docs.map(d=>({id:d.id,...d.data()}));
+  }
+  products=restored.products||[];
+  currentOrders=(restored.orders||[]).sort((a,b)=>t(b.createdAt)-t(a.createdAt));
+  purchases=restored.purchases||[];
+  batches=restored.batches||[];
+  bills=restored.bills||[];
+  customers=restored.customers||[];
+  reminders=(restored.reminders||[]).sort((a,b)=>t(a.reminderDate)-t(b.reminderDate));
+  suppliers=restored.suppliers||[];
+  if(Array.isArray(restored.stockMovements))set('stockMovements',restored.stockMovements);
+  set('products',products);
+  set('purchases',purchases);
+  set('batches',batches);
+  set('customers',customers);
+  set('suppliers',suppliers);
+  persistReminders(reminders);
+  // Rebuild the rendered stock state from the restored canonical records.
+  applyPendingStockOverlay();
+  liveStarted=true;
  }else{
   // Restore is a snapshot: the selected backup is loaded exactly as saved.
   for(const name of backupCollections){
