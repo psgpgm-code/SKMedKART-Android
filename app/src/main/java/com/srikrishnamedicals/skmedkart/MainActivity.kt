@@ -37,7 +37,6 @@ class MainActivity : AppCompatActivity() {
                     override fun onPageFinished(view: WebView, url: String) {
                         val printManager = getSystemService(PRINT_SERVICE) as PrintManager
                         val adapter = view.createPrintDocumentAdapter("SKMedKART Bill")
-                        printWebView = view
                         printManager.print("SKMedKART Bill", adapter, PrintAttributes.Builder().build())
                     }
                 }
