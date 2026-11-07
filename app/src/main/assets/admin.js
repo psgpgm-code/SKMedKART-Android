@@ -929,26 +929,46 @@ window.deleteAllAppData=async()=>{
  if(!saved)return alert('Delete password is not created yet. Tap "Create Delete Password" first.');
  if(saved!==pw)return alert('Incorrect Delete Password.');
  if(!confirm('FINAL CONFIRMATION: Delete ALL Firebase app data? This cannot be undone.'))return;
+ const firebaseOp=async(fn,label)=>{
+   let lastError=null;
+   for(let attempt=1;attempt<=3;attempt++){
+     try{
+       const result=await Promise.race([
+         fn(),
+         new Promise((_,reject)=>setTimeout(()=>reject(new Error(label+' timed out')),45000))
+       ]);
+       return result;
+     }catch(e){
+       lastError=e;
+       if(attempt<3){
+         if(status)status.textContent=label+' retry '+attempt+'/2...';
+         await new Promise(resolve=>setTimeout(resolve,1500*attempt));
+       }
+     }
+   }
+   throw lastError||new Error(label+' failed');
+ };
  try{
    if(!db)await ensureFirebase();
    if(status)status.textContent='Deleting Firebase data...';
    if(configured){
      for(const name of backupCollections){
-       const snap=await getDocs(collection(db,name));
+       const snap=await firebaseOp(()=>getDocs(collection(db,name)),'Reading '+name);
        const rows=snap.docs;
        for(let i=0;i<rows.length;i+=200){
-         const wb=writeBatch(db);
-         rows.slice(i,i+200).forEach(d=>wb.delete(d.ref));
-         await wb.commit();
+         const chunk=rows.slice(i,i+200);
+         await firebaseOp(()=>{
+           const wb=writeBatch(db);
+           chunk.forEach(d=>wb.delete(d.ref));
+           return wb.commit();
+         },'Deleting '+name+' batch');
          if(status)status.textContent='Deleting '+name+'... '+Math.min(i+200,rows.length)+'/'+rows.length;
        }
      }
    }
-   // WebView can keep an IndexedDB delete request pending while this app owns
-   // an open connection. Release our connection first and do not await the
-   // browser's deleteDatabase request.
+   // Release the local IndexedDB connection before clearing the WebView database.
    try{if(largeDBPromise){const ldb=await largeDBPromise;try{ldb.close()}catch{};largeDBPromise=null;largeReady=false}}catch{}
-   try{const dbs=await indexedDB.databases?.();(dbs||[]).filter(x=>String(x.name||'').includes('skmed')).forEach(x=>{try{indexedDB.deleteDatabase(x.name)}catch{}})}catch{}
+   try{const dbs=await indexedDB.databases?.();for(const x of (dbs||[])){if(String(x.name||'').includes('skmed')){try{indexedDB.deleteDatabase(x.name)}catch{}}}}catch{}
    try{localStorage.clear()}catch{}
    if(status)status.textContent='All app data deleted successfully.';
    alert('All SKMedKART app data has been deleted. Firebase login remains available.');
