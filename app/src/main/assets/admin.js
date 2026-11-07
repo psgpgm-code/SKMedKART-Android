@@ -967,58 +967,61 @@ async function backupData(){
  return out;
 }
 window.downloadBackup=async()=>{try{const status=$('restoreStatus');if(status)status.textContent='Preparing backup...';const data=await backupData();const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='SKMedKART_BACKUP_'+today()+'_'+Date.now()+'.json';document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},500);if(status)status.textContent='Backup downloaded successfully.';}catch(e){alert('Backup failed: '+e.message)}};
+async function commitFirestoreBatchWithTimeout(batch,timeoutMs=20000){
+ const timeout=new Promise((_,reject)=>setTimeout(()=>reject(new Error('Firebase restore timed out. Please check the internet connection and try again.')),timeoutMs));
+ return Promise.race([batch.commit(),timeout]);
+}
 async function restoreData(data){
  if(!data?.collections||typeof data.collections!=='object')throw Error('Invalid SKMedKART backup file.');
  if(configured){
   if(!db)await ensureFirebase();
   const total=backupCollections.reduce((n,name)=>n+(Array.isArray(data.collections[name])?data.collections[name].length:0),0);
   let done=0;
+  const status=$('restoreStatus');
+  if(status)status.textContent='Backup loaded. Preparing '+total.toLocaleString()+' records...';
+  if(!navigator.onLine)throw Error('Internet connection is offline. Connect to the internet and restore again.');
   for(const name of backupCollections){
     const rows=Array.isArray(data.collections[name])?data.collections[name]:[];
-    for(let i=0;i<rows.length;i+=200){
+    if(status)status.textContent='Restoring '+name+'... 0/'+rows.length+' ('+done+'/'+total+' total)';
+    for(let i=0;i<rows.length;i+=100){
+      if(!navigator.onLine)throw Error('Internet connection was lost during restore.');
       const wb=writeBatch(db);
-      rows.slice(i,i+200).forEach(row=>{
+      const chunk=rows.slice(i,i+100);
+      chunk.forEach(row=>{
         const copy={...row};
         const id=String(copy.id||uid());
         delete copy.id;
         wb.set(doc(db,name,id),copy,{merge:true});
       });
-      await wb.commit();
-      done+=Math.min(200,rows.length-i);
-      const status=$('restoreStatus');
-      if(status)status.textContent='Restoring '+name+'... '+done+'/'+total;
+      await commitFirestoreBatchWithTimeout(wb,20000);
+      done+=chunk.length;
+      if(status)status.textContent='Restoring '+name+'... '+Math.min(i+chunk.length,rows.length)+'/'+rows.length+' ('+done+'/'+total+' total)';
+      await new Promise(requestAnimationFrame);
     }
   }
 
-  // IMPORTANT: Restore must refresh the same in-memory collections used by
-  // Dashboard/Stock/Billing. Do not rely only on the asynchronous onSnapshot
-  // listeners after a large batch restore; otherwise the UI can temporarily
-  // render zero records even though Firestore already contains the restored data.
-  const restored={};
-  for(const name of backupCollections){
-    const snap=await getDocs(collection(db,name));
-    restored[name]=snap.docs.map(d=>({id:d.id,...d.data()}));
-  }
-  products=restored.products||[];
-  currentOrders=(restored.orders||[]).sort((a,b)=>t(b.createdAt)-t(a.createdAt));
-  purchases=restored.purchases||[];
-  batches=restored.batches||[];
-  bills=restored.bills||[];
-  customers=restored.customers||[];
-  reminders=(restored.reminders||[]).sort((a,b)=>t(a.reminderDate)-t(b.reminderDate));
-  suppliers=restored.suppliers||[];
-  if(Array.isArray(restored.stockMovements))set('stockMovements',restored.stockMovements);
+  // Refresh the same in-memory collections used by Dashboard/Stock/Billing
+  // directly from the verified backup. Do not wait for onSnapshot/getDocs here.
+  products=Array.isArray(data.collections.products)?data.collections.products:[];
+  currentOrders=(Array.isArray(data.collections.orders)?data.collections.orders:[]).sort((a,b)=>t(b.createdAt)-t(a.createdAt));
+  purchases=Array.isArray(data.collections.purchases)?data.collections.purchases:[];
+  batches=Array.isArray(data.collections.batches)?data.collections.batches:[];
+  bills=Array.isArray(data.collections.bills)?data.collections.bills:[];
+  customers=Array.isArray(data.collections.customers)?data.collections.customers:[];
+  reminders=(Array.isArray(data.collections.reminders)?data.collections.reminders:[]).sort((a,b)=>t(a.reminderDate)-t(b.reminderDate));
+  suppliers=Array.isArray(data.collections.suppliers)?data.collections.suppliers:[];
   set('products',products);
   set('purchases',purchases);
   set('batches',batches);
+  set('bills',bills);
   set('customers',customers);
   set('suppliers',suppliers);
   persistReminders(reminders);
-  // Rebuild the rendered stock state from the restored canonical records.
+  if(Array.isArray(data.collections.stockMovements))set('stockMovements',data.collections.stockMovements);
+  rebuildEffectiveStockCache();
   applyPendingStockOverlay();
   liveStarted=true;
  }else{
-  // Restore is a snapshot: the selected backup is loaded exactly as saved.
   for(const name of backupCollections){
     const rows=Array.isArray(data.collections[name])?data.collections[name]:[];
     set(name,rows);
@@ -1033,11 +1036,15 @@ $('restoreFile')?.addEventListener('change',async e=>{
  const status=$('restoreStatus');
  try{
   if(!confirm('Restore this backup? Existing matching records will be overwritten or updated.')){e.target.value='';return}
-  if(status)status.textContent='Restoring backup...';
-  const data=JSON.parse(await file.text());
+  if(status)status.textContent='Reading backup file...';
+  const raw=await file.text();
+  if(status)status.textContent='Checking backup file...';
+  const data=JSON.parse(raw);
+  const recordCount=backupCollections.reduce((n,name)=>n+(Array.isArray(data?.collections?.[name])?data.collections[name].length:0),0);
+  if(status)status.textContent='Backup ready: '+recordCount.toLocaleString()+' records. Starting restore...';
   await restoreData(data);
   if(!configured){liveStarted=false;await loadAll();renderAll()}
-  else {renderAll();if(status)status.textContent='Restore completed successfully.';alert('Restore completed successfully.');}
+  else {renderAll();if(status)status.textContent='Restore completed successfully. '+recordCount.toLocaleString()+' records restored.';alert('Restore completed successfully.');}
  }catch(err){
   if(status)status.textContent='Restore failed: '+(err?.message||'Unknown error');
   alert('Restore failed: '+(err?.message||'Unknown error'));
