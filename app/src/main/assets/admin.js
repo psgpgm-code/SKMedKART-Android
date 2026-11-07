@@ -930,29 +930,36 @@ window.deleteAllAppData=async()=>{
  if(saved!==pw)return alert('Incorrect Delete Password.');
  if(!confirm('FINAL CONFIRMATION: Delete ALL Firebase app data? This cannot be undone.'))return;
  try{
+   if(!db)await ensureFirebase();
    if(status)status.textContent='Deleting Firebase data...';
    if(configured){
      for(const name of backupCollections){
        const snap=await getDocs(collection(db,name));
        const rows=snap.docs;
-       for(let i=0;i<rows.length;i+=100){
+       for(let i=0;i<rows.length;i+=200){
          const wb=writeBatch(db);
-         rows.slice(i,i+100).forEach(d=>wb.delete(d.ref));
+         rows.slice(i,i+200).forEach(d=>wb.delete(d.ref));
          await wb.commit();
+         if(status)status.textContent='Deleting '+name+'... '+Math.min(i+200,rows.length)+'/'+rows.length;
        }
      }
    }
-   try{await indexedDB.databases?.().then(async dbs=>Promise.all((dbs||[]).filter(x=>String(x.name||'').includes('skmed')).map(x=>indexedDB.deleteDatabase(x.name))))}catch{}
+   // WebView can keep an IndexedDB delete request pending while this app owns
+   // an open connection. Release our connection first and do not await the
+   // browser's deleteDatabase request.
+   try{if(largeDBPromise){const ldb=await largeDBPromise;try{ldb.close()}catch{};largeDBPromise=null;largeReady=false}}catch{}
+   try{const dbs=await indexedDB.databases?.();(dbs||[]).filter(x=>String(x.name||'').includes('skmed')).forEach(x=>{try{indexedDB.deleteDatabase(x.name)}catch{}})}catch{}
    try{localStorage.clear()}catch{}
    if(status)status.textContent='All app data deleted successfully.';
    alert('All SKMedKART app data has been deleted. Firebase login remains available.');
    location.reload();
  }catch(e){
-   if(status)status.textContent='Delete failed.';
-   alert('Delete failed: '+e.message);
+   if(status)status.textContent='Delete failed: '+(e?.message||'Unknown error');
+   alert('Delete failed: '+(e?.message||'Unknown error'));
  }
 };
-const backupCollections=['products','batches','bills','purchases','suppliers','customers','reminders','orders','stockMovements'];
+
+const backupCollections=const backupCollections=['products','batches','bills','purchases','suppliers','customers','reminders','orders','stockMovements'];
 async function backupData(){
  const out={app:'SKMedKART Admin Portal',version:'5.6',createdAt:new Date().toISOString(),mode:configured?'firebase':'demo',collections:{}};
  if(configured){for(const name of backupCollections){const snap=await getDocs(collection(db,name));out.collections[name]=snap.docs.map(d=>({id:d.id,...d.data()}));}}
@@ -963,21 +970,53 @@ window.downloadBackup=async()=>{try{const status=$('restoreStatus');if(status)st
 async function restoreData(data){
  if(!data?.collections||typeof data.collections!=='object')throw Error('Invalid SKMedKART backup file.');
  if(configured){
-  for(const name of backupCollections){const rows=Array.isArray(data.collections[name])?data.collections[name]:[];for(let i=0;i<rows.length;i+=100){const wb=writeBatch(db);rows.slice(i,i+100).forEach(row=>{const copy={...row};const id=String(copy.id||uid());delete copy.id;wb.set(doc(db,name,id),copy,{merge:true});});await wb.commit();}}
+  if(!db)await ensureFirebase();
+  const total=backupCollections.reduce((n,name)=>n+(Array.isArray(data.collections[name])?data.collections[name].length:0),0);
+  let done=0;
+  for(const name of backupCollections){
+    const rows=Array.isArray(data.collections[name])?data.collections[name]:[];
+    for(let i=0;i<rows.length;i+=200){
+      const wb=writeBatch(db);
+      rows.slice(i,i+200).forEach(row=>{
+        const copy={...row};
+        const id=String(copy.id||uid());
+        delete copy.id;
+        wb.set(doc(db,name,id),copy,{merge:true});
+      });
+      await wb.commit();
+      done+=Math.min(200,rows.length-i);
+      const status=$('restoreStatus');
+      if(status)status.textContent='Restoring '+name+'... '+done+'/'+total;
+    }
+  }
  }else{
-  // Restore is a snapshot: the selected backup is loaded exactly as saved. We do
-  // not subtract "duplicate" purchases from the snapshot, because that can turn a
-  // correct batch quantity into an incorrect one. The stock-integrity reconciliation
-  // below handles legacy missing movement/batch links without double-adding stock.
-  for(const name of backupCollections){const rows=Array.isArray(data.collections[name])?data.collections[name]:[];set(name,rows)}
+  // Restore is a snapshot: the selected backup is loaded exactly as saved.
+  for(const name of backupCollections){
+    const rows=Array.isArray(data.collections[name])?data.collections[name]:[];
+    set(name,rows);
+  }
   products=get('products',[]);currentOrders=get('orders',[]);purchases=get('purchases',[]);batches=get('batches',[]);bills=get('bills',[]);customers=get('customers',[]);reminders=loadLocalReminders();suppliers=get('suppliers',[]);
   repairLocalStockConsistency();
   localStorage.setItem('skm_stock_repair_v5_done','yes');
  }
 }
-$('restoreFile')?.addEventListener('change',async e=>{const file=e.target.files?.[0];if(!file)return;const status=$('restoreStatus');try{if(!confirm('Restore this backup? Existing matching records will be overwritten or updated.')){e.target.value='';return}if(status)status.textContent='Restoring backup...';const data=JSON.parse(await file.text());await restoreData(data);if(status)status.textContent='Restore completed successfully.';if(!configured){liveStarted=false;await loadAll();if(status)status.textContent='Restore completed successfully.'}else {if(status)status.textContent='Restore completed successfully.';alert('Restore completed. Live data will refresh automatically.');}}catch(err){if(status)status.textContent='Restore failed.';alert('Restore failed: '+err.message)}finally{e.target.value=''}});
+$('restoreFile')?.addEventListener('change',async e=>{
+ const file=e.target.files?.[0];if(!file)return;
+ const status=$('restoreStatus');
+ try{
+  if(!confirm('Restore this backup? Existing matching records will be overwritten or updated.')){e.target.value='';return}
+  if(status)status.textContent='Restoring backup...';
+  const data=JSON.parse(await file.text());
+  await restoreData(data);
+  if(!configured){liveStarted=false;await loadAll();renderAll()}
+  else {renderAll();if(status)status.textContent='Restore completed successfully.';alert('Restore completed successfully.');}
+ }catch(err){
+  if(status)status.textContent='Restore failed: '+(err?.message||'Unknown error');
+  alert('Restore failed: '+(err?.message||'Unknown error'));
+ }finally{e.target.value=''}
+});
 
-window.calculatePurchaseGst=()=>{
+window.calculatePurchaseGstwindow.calculatePurchaseGst=()=>{
   const base=Math.max(0,Number($('puCost')?.value)||0);
   const rate=Math.max(0,Number($('puGst')?.value)||0);
   const total=base+(base*rate/100);
@@ -1148,9 +1187,64 @@ window.renderPurchases=()=>{
  box.innerHTML='<div class="small">No purchases or products found for “'+esc(input.value)+'”.</div>';
 };
 
-function purchaseRow(p){const pid=esc(p.id||'');return '<div class=\"itemrow\"><b>'+esc(p.productName||p.medicine||p.name||'-')+'</b> • Qty '+Number(p.qty||0)+'<br><span class=\"small\">'+(p.manufacturer||p.manufacturerDetails?('Manufacturer: '+esc(p.manufacturer||p.manufacturerDetails)+' • '):'')+esc(p.supplier||p.supplierName||'-')+' • Batch '+esc(p.batchNumber||p.batch||'-')+' • Exp '+esc(p.expiryDate||'-')+' • Purchase ₹'+Number(p.purchasePrice||0).toFixed(2)+' + GST '+Number(p.purchaseGstRate||0).toFixed(2)+'% = ₹'+Number(p.purchasePriceWithGst??(Number(p.purchasePrice||0)*(1+Number(p.purchaseGstRate||0)/100))).toFixed(2)+'</span><div class=\"actions\"><button class=\"secondary\" type=\"button\" data-edit-purchase=\"'+pid+'\" onclick=\"window.editPurchase(this.dataset.editPurchase)\">✏️ Edit Purchase</button><button class=\"danger\" type=\"button\" data-delete-purchase=\"'+pid+'\" onclick=\"window.deletePurchase(this.dataset.deletePurchase)\">🗑️ Delete Purchase</button></div></div>'}
+function purchaseRow(p){
+ const pid=esc(p.id||'');
+ const totalQty=Math.max(0,Number(p.qty||0));
+ const returnedQty=Math.max(0,Number(p.returnedToSupplierQty||0));
+ const remainingQty=Math.max(0,totalQty-returnedQty);
+ return '<div class="itemrow"><b>'+esc(p.productName||p.medicine||p.name||'-')+'</b> • Qty '+totalQty+(returnedQty?' • Supplier Returned '+returnedQty:'')+'<br><span class="small">'+(p.manufacturer||p.manufacturerDetails?('Manufacturer: '+esc(p.manufacturer||p.manufacturerDetails)+' • '):'')+esc(p.supplier||p.supplierName||'-')+' • Batch '+esc(p.batchNumber||p.batch||'-')+' • Exp '+esc(p.expiryDate||'-')+' • Purchase ₹'+Number(p.purchasePrice||0).toFixed(2)+' + GST '+Number(p.purchaseGstRate||0).toFixed(2)+'% = ₹'+Number(p.purchasePriceWithGst??(Number(p.purchasePrice||0)*(1+Number(p.purchaseGstRate||0)/100))).toFixed(2)+'</span><div class="actions"><button class="secondary" type="button" data-edit-purchase="'+pid+'" onclick="window.editPurchase(this.dataset.editPurchase)">✏️ Edit Purchase</button>'+(remainingQty>0?'<button class="danger" type="button" data-return-purchase="'+pid+'" onclick="window.returnToSupplier(this.dataset.returnPurchase)">↩ Return to Supplier</button>':'<span class="returnedBadge">✓ Fully Returned to Supplier</span>')+'<button class="danger" type="button" data-delete-purchase="'+pid+'" onclick="window.deletePurchase(this.dataset.deletePurchase)">🗑️ Delete Purchase</button></div></div>'}
 
-window.deletePurchase=async id=>{
+window.returnToSupplier=async id=>{
+ const purchase=purchases.find(x=>String(x.id)===String(id));
+ if(!purchase)return alert('Purchase record not found.');
+ const product=products.find(x=>String(x.id)===String(purchase.productId));
+ const productName=purchase.productName||purchase.medicine||purchase.name||product?.name||'this medicine';
+ const totalQty=Math.max(0,Number(purchase.qty||0));
+ const already=Math.max(0,Number(purchase.returnedToSupplierQty||0));
+ const remaining=Math.max(0,totalQty-already);
+ if(remaining<=0)return alert('This purchase is already fully returned to supplier.');
+ const raw=prompt('Return quantity to supplier for '+productName+' (Remaining: '+remaining+')',String(remaining));
+ if(raw===null)return;
+ const rq=Math.floor(Number(raw));
+ if(!Number.isFinite(rq)||rq<1||rq>remaining)return alert('Enter a valid quantity from 1 to '+remaining+'.');
+ const batchNumber=String(purchase.batchNumber||purchase.batch||'');
+ try{
+   if(configured){
+     await runTransaction(db,async tx=>{
+       const batchId=String(purchase.batchId||'');
+       const br=batchId?doc(db,'batches',batchId):doc(db,'batches',String(purchase.productId)+'__'+batchNumber);
+       const pr=doc(db,'products',String(purchase.productId));
+       const pur=doc(db,'purchases',String(purchase.id));
+       const [bs,ps,pus]=await Promise.all([tx.get(br),tx.get(pr),tx.get(pur)]);
+       if(!bs.exists())throw Error('Original batch not found.');
+       if(!ps.exists())throw Error('Original product not found.');
+       if(!pus.exists())throw Error('Purchase record not found.');
+       const liveBatch=bs.data(),livePurchase=pus.data(),available=Math.max(0,Number(liveBatch.stock||0));
+       if(available<rq)throw Error('Only '+available+' unit(s) are currently available in this batch. Already sold/used quantity cannot be returned to supplier.');
+       const nextReturned=Math.min(totalQty,Math.max(0,Number(livePurchase.returnedToSupplierQty||already)+rq));
+       tx.update(br,{stock:available-rq,updatedAt:serverTimestamp()});
+       tx.update(pr,{stock:Math.max(0,Number(ps.data().stock||0)-rq),updatedAt:serverTimestamp()});
+       tx.update(pur,{returnedToSupplierQty:nextReturned,supplierReturned:nextReturned>=totalQty,supplierReturnDate:serverTimestamp(),supplierReturnQtyLast:rq,updatedAt:serverTimestamp()});
+       tx.set(doc(collection(db,'stockMovements')),{type:'SUPPLIER_RETURN',productId:String(purchase.productId),batchId:br.id,batchNumber:liveBatch.batchNumber||batchNumber,qty:-rq,reference:'SUPPLIER_RETURN',purchaseId:String(purchase.id),supplier:purchase.supplier||purchase.supplierName||'',createdAt:serverTimestamp()});
+     });
+   }else{
+     const batch=batches.find(x=>String(x.id)===String(purchase.batchId||'') || (String(x.productId)===String(purchase.productId)&&String(x.batchNumber||x.batch||'')===batchNumber));
+     const prod=products.find(x=>String(x.id)===String(purchase.productId));
+     if(!batch||!prod)throw Error('Original product or batch not found.');
+     if(Number(batch.stock||0)<rq)throw Error('Only '+Number(batch.stock||0)+' unit(s) are currently available in this batch. Already sold/used quantity cannot be returned to supplier.');
+     batch.stock=Math.max(0,Number(batch.stock||0)-rq);
+     prod.stock=batches.filter(x=>String(x.productId)===String(purchase.productId)).reduce((n,x)=>n+Math.max(0,Number(x.stock||0)),0);
+     const pi=purchases.findIndex(x=>String(x.id)===String(purchase.id));
+     if(pi>=0){purchases[pi]={...purchases[pi],returnedToSupplierQty:Math.min(totalQty,already+rq),supplierReturned:already+rq>=totalQty,supplierReturnDate:new Date().toISOString(),supplierReturnQtyLast:rq}}
+     set('batches',batches);set('products',products);set('purchases',purchases);
+     const sm=get('stockMovements',[]);sm.push({id:'SR'+Date.now()+Math.random(),type:'SUPPLIER_RETURN',productId:String(purchase.productId),batchId:String(batch.id),batchNumber:batch.batchNumber||batchNumber,qty:-rq,reference:'SUPPLIER_RETURN',purchaseId:String(purchase.id),supplier:purchase.supplier||purchase.supplierName||'',createdAt:new Date().toISOString()});set('stockMovements',sm);
+   }
+   alert(rq+' unit(s) returned to supplier successfully. Stock has been reduced.');
+   renderAll();
+ }catch(e){alert('Return to supplier failed: '+(e?.message||'Unknown error'))}
+};
+
+window.deletePurchase=async id=>{window.deletePurchase=async id=>{
  const purchase=purchases.find(x=>String(x.id)===String(id));
  if(!purchase)return alert('Purchase record not found.');
  const product=products.find(x=>String(x.id)===String(purchase.productId));
