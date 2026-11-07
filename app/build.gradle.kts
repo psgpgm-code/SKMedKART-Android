@@ -1,3 +1,5 @@
+import java.util.Base64
+
 plugins { id("com.android.application"); id("org.jetbrains.kotlin.android") }
 android {
  namespace="com.srikrishnamedicals.skmedkart"; compileSdk=35
@@ -22,7 +24,7 @@ tasks.register("prepareSkmedkartIcon") {
         val source = project.file("src/main/icon-source/skmedkart_icon.jpg.b64")
         val target = project.file("src/main/res/drawable/skmedkart_icon.jpg")
         target.parentFile.mkdirs()
-        target.writeBytes(java.util.Base64.getDecoder().decode(source.readText().trim()))
+        target.writeBytes(Base64.getDecoder().decode(source.readText().trim()))
     }
 }
 tasks.named("preBuild") {
