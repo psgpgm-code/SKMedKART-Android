@@ -78,15 +78,34 @@ async function ensureFirebase(){
   if(db&&auth)return true;
   if(!firebaseReadyPromise){
     firebaseReadyPromise=(async()=>{
-      const [appMod,authMod,fsMod]=await Promise.all([
-        import('https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js'),
-        import('https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js'),
-        import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js')
-      ]);
-      initializeApp=appMod.initializeApp;
-      ({getAuth,signInWithEmailAndPassword,onAuthStateChanged,signOut}=authMod);
-      ({getFirestore,collection,onSnapshot,doc,updateDoc,serverTimestamp,addDoc,setDoc,runTransaction,getDocs,writeBatch,deleteDoc}=fsMod);
-      const app=initializeApp(cfg);db=getFirestore(app);auth=getAuth(app);
+      // Android WebView: use Firebase Compat SDK loaded as normal scripts.
+      // Do NOT use dynamic import() here; some Android WebViews reject
+      // cross-origin ES module fetches and produce:
+      // "Failed to fetch dynamically imported module".
+      if(!window.firebase)throw new Error('Firebase SDK failed to load.');
+      initializeApp=(config)=>window.firebase.initializeApp(config);
+      getAuth=(app)=>window.firebase.auth(app);
+      signInWithEmailAndPassword=(auth,email,password)=>auth.signInWithEmailAndPassword(email,password);
+      onAuthStateChanged=(auth,cb)=>auth.onAuthStateChanged(cb);
+      signOut=(auth)=>auth.signOut();
+      getFirestore=(app)=>window.firebase.firestore(app);
+      collection=(db,name)=>db.collection(name);
+      doc=function(dbOrCollection,path,id){
+        if(arguments.length===1 && dbOrCollection && typeof dbOrCollection.doc==='function')return dbOrCollection.doc();
+        if(arguments.length===2 && dbOrCollection && typeof dbOrCollection.doc==='function' && typeof path==='string')return dbOrCollection.doc(path);
+        return id===undefined?dbOrCollection.doc(path):dbOrCollection.collection(path).doc(id);
+      };
+      updateDoc=(ref,data)=>ref.update(data);
+      serverTimestamp=()=>window.firebase.firestore.FieldValue.serverTimestamp();
+      addDoc=(col,data)=>col.add(data);
+      setDoc=(ref,data,options)=>options&&options.merge?ref.set(data,{merge:true}):ref.set(data);
+      runTransaction=(db,fn)=>db.runTransaction(fn);
+      getDocs=(ref)=>ref.get();
+      writeBatch=(db)=>db.batch();
+      deleteDoc=(ref)=>ref.delete();
+
+      const app=window.firebase.apps.length?window.firebase.app():initializeApp(cfg);
+      db=getFirestore(app);auth=getAuth(app);
       onAuthStateChanged(auth,u=>{
         if(!u){if(loginOpening)return;$('panel')?.classList.add('hidden');$('bottomNav')?.classList.add('hidden');$('loginCard')?.classList.remove('hidden');return}
         const allowed=admins.map(normalizeEmail);
