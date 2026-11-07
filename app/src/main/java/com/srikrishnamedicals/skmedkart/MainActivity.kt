@@ -2,6 +2,13 @@ package com.srikrishnamedicals.skmedkart
 
 import android.annotation.SuppressLint
 import android.content.Intent
+import android.print.PrintAttributes
+import android.print.PrintManager
+import android.webkit.JavascriptInterface
+import android.webkit.WebViewClient
+import android.util.Base64
+import androidx.core.content.FileProvider
+import java.io.File
 import android.net.Uri
 import android.os.Bundle
 import android.webkit.ValueCallback
@@ -18,11 +25,59 @@ class MainActivity : AppCompatActivity() {
     private lateinit var webView: WebView
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
 
+
+    private inner class AndroidBridge {
+        @JavascriptInterface
+        fun printHtml(html: String) {
+            runOnUiThread {
+                val pv = WebView(this@MainActivity)
+                pv.settings.javaScriptEnabled = true
+                pv.settings.domStorageEnabled = true
+                pv.webViewClient = object : WebViewClient() {
+                    override fun onPageFinished(view: WebView, url: String) {
+                        val printManager = getSystemService(PRINT_SERVICE) as PrintManager
+                        val adapter = view.createPrintDocumentAdapter("SKMedKART Bill")
+                        printWebView = view
+                        printManager.print("SKMedKART Bill", adapter, PrintAttributes.Builder().build())
+                    }
+                }
+                pv.loadDataWithBaseURL("https://appassets.androidplatform.net/assets/", html, "text/html", "UTF-8", null)
+            }
+        }
+
+        @JavascriptInterface
+        fun sharePdf(base64: String, fileName: String, text: String) {
+            try {
+                val bytes = Base64.decode(base64, Base64.DEFAULT)
+                val dir = File(cacheDir, "shared_bills").apply { mkdirs() }
+                val safeName = fileName.replace(Regex("[^A-Za-z0-9._-]"), "_")
+                val file = File(dir, safeName)
+                file.writeBytes(bytes)
+                val uri = FileProvider.getUriForFile(this@MainActivity, "${packageName}.fileprovider", file)
+                val intent = Intent(Intent.ACTION_SEND).apply {
+                    type = "application/pdf"
+                    putExtra(Intent.EXTRA_TEXT, text)
+                    putExtra(Intent.EXTRA_STREAM, uri)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                if (packageManager.getLaunchIntentForPackage("com.whatsapp") != null) {
+                    intent.setPackage("com.whatsapp")
+                }
+                startActivity(intent)
+            } catch (e: Exception) {
+                runOnUiThread {
+                    android.widget.Toast.makeText(this@MainActivity, "Bill share failed: ${e.message}", android.widget.Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         webView = WebView(this)
+        webView.addJavascriptInterface(AndroidBridge(), "AndroidBridge")
         setContentView(webView)
 
         val assetLoader = WebViewAssetLoader.Builder()
