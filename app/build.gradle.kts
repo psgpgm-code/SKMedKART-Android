@@ -17,8 +17,6 @@ dependencies {
  implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.9.0")
 }
 
-import java.util.Base64
-
 val prepareSkmedkartIcon = tasks.register("prepareSkmedkartIcon") {
     val source = file("src/main/icon-source/skmedkart_icon.jpg.b64")
     val target = file("src/main/res/drawable/skmedkart_icon.jpg")
@@ -26,7 +24,7 @@ val prepareSkmedkartIcon = tasks.register("prepareSkmedkartIcon") {
     outputs.file(target)
     doLast {
         target.parentFile.mkdirs()
-        target.writeBytes(Base64.getDecoder().decode(source.readText().trim()))
+        target.writeBytes(java.util.Base64.getDecoder().decode(source.readText().trim()))
     }
 }
 
