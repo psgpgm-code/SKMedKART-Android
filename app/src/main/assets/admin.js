@@ -998,12 +998,21 @@ async function commitFirestoreBatchWithRetry(batchFactory,timeoutMs=60000,maxAtt
    return;
   }catch(e){
    lastError=e;
-   if(attempt<maxAttempts){
-    await new Promise(resolve=>setTimeout(resolve,1500*attempt));
-   }
+   if(attempt<maxAttempts)await new Promise(resolve=>setTimeout(resolve,1500*attempt));
   }
  }
  throw new Error('Firebase restore could not complete this batch after '+maxAttempts+' attempts. Please check the internet connection and try again.');
+}
+function buildRestoreRows(name,rows){
+ const seen=new Set();
+ return rows.map((row,index)=>{
+  const copy={...row};
+  let id=String(copy.id||'').trim();
+  if(!id||seen.has(id))id='__restore_'+name+'_'+index;
+  seen.add(id);
+  delete copy.id;
+  return {id,data:copy};
+ });
 }
 async function restoreData(data){
  if(!data?.collections||typeof data.collections!=='object')throw Error('Invalid SKMedKART backup file.');
@@ -1014,39 +1023,53 @@ async function restoreData(data){
   const total=backupCollections.reduce((n,name)=>n+(Array.isArray(data.collections[name])?data.collections[name].length:0),0);
   let done=0;
 
-  // Restore is a SNAPSHOT: the selected backup is the source of truth.
-  // First write every backup record with its original ID. Never generate a new
-  // ID for a record that already has one.
+  // Android restore is an exact SNAPSHOT of the selected backup.
+  // The old Offline Admin app is not modified by this code.
   for(const name of backupCollections){
-    const rows=Array.isArray(data.collections[name])?data.collections[name]:[];
-    if(status)status.textContent='Restoring '+name+'... 0/'+rows.length+' ('+done+'/'+total+' total)';
-    for(let i=0;i<rows.length;i+=100){
-      if(!navigator.onLine)throw Error('Internet connection was lost during restore.');
-      const chunk=rows.slice(i,i+100);
-      await commitFirestoreBatchWithRetry(()=>{
-        const wb=writeBatch(db);
-        chunk.forEach(row=>{
-          const copy={...row};
-          const id=String(copy.id||'').trim()||uid();
-          delete copy.id;
-          wb.set(doc(db,name,id),copy,{merge:false});
-        });
-        return wb;
-      },60000,3);
-      done+=chunk.length;
-      if(status)status.textContent='Restoring '+name+'... '+Math.min(i+chunk.length,rows.length)+'/'+rows.length+' ('+done+'/'+total+' total)';
-      await new Promise(requestAnimationFrame);
+   const rows=Array.isArray(data.collections[name])?data.collections[name]:[];
+   const normalized=buildRestoreRows(name,rows);
+   const wantedIds=new Set(normalized.map(x=>x.id));
+   if(status)status.textContent='Preparing '+name+'... '+rows.length+' records';
+
+   // Remove Firebase records that are not present in the selected backup.
+   // This prevents old Firebase-only records from being mixed into the restored dataset.
+   const existing=(await getDocs(collection(db,name))).docs;
+   for(let i=0;i<existing.length;i+=100){
+    if(!navigator.onLine)throw Error('Internet connection was lost during restore.');
+    const stale=existing.slice(i,i+100).filter(d=>!wantedIds.has(d.id));
+    if(stale.length){
+     await commitFirestoreBatchWithRetry(()=>{
+      const wb=writeBatch(db);
+      stale.forEach(d=>wb.delete(d.ref));
+      return wb;
+     },60000,3);
     }
+   }
+
+   for(let i=0;i<normalized.length;i+=100){
+    if(!navigator.onLine)throw Error('Internet connection was lost during restore.');
+    const chunk=normalized.slice(i,i+100);
+    await commitFirestoreBatchWithRetry(()=>{
+     const wb=writeBatch(db);
+     chunk.forEach(item=>wb.set(doc(db,name,item.id),item.data,{merge:false}));
+     return wb;
+    },60000,3);
+    done+=chunk.length;
+    if(status)status.textContent='Restoring '+name+'... '+Math.min(i+chunk.length,rows.length)+'/'+rows.length+' ('+done+'/'+total+' total)';
+    await new Promise(requestAnimationFrame);
+   }
   }
 
-  // Verify the counts actually present in Firebase before declaring success.
-  // This prevents the UI from saying "Restore completed" when some records
-  // were not committed.
+  // Verify both count and restored document IDs before declaring success.
   const mismatches=[];
   for(const name of backupCollections){
-    const expected=Array.isArray(data.collections[name])?data.collections[name].length:0;
-    const actual=(await getDocs(collection(db,name))).size;
-    if(expected!==actual)mismatches.push(name+': backup '+expected+' / Firebase '+actual);
+   const expected=Array.isArray(data.collections[name])?data.collections[name].length:0;
+   const snap=await getDocs(collection(db,name));
+   const actual=snap.size;
+   const expectedIds=buildRestoreRows(name,Array.isArray(data.collections[name])?data.collections[name]:[]).map(x=>x.id);
+   const actualIds=new Set(snap.docs.map(d=>d.id));
+   const missingIds=expectedIds.filter(id=>!actualIds.has(id));
+   if(expected!==actual||missingIds.length)mismatches.push(name+': backup '+expected+' / Firebase '+actual+(missingIds.length?' / missing '+missingIds.length:''));
   }
   if(mismatches.length)throw Error('Restore verification failed. '+mismatches.join(', '));
 
@@ -1071,8 +1094,8 @@ async function restoreData(data){
   liveStarted=true;
  }else{
   for(const name of backupCollections){
-    const rows=Array.isArray(data.collections[name])?data.collections[name]:[];
-    set(name,rows);
+   const rows=Array.isArray(data.collections[name])?data.collections[name]:[];
+   set(name,rows);
   }
   products=get('products',[]);currentOrders=get('orders',[]);purchases=get('purchases',[]);batches=get('batches',[]);bills=get('bills',[]);customers=get('customers',[]);reminders=loadLocalReminders();suppliers=get('suppliers',[]);
   repairLocalStockConsistency();
