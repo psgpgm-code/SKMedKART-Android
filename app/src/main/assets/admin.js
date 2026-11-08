@@ -1009,36 +1009,47 @@ async function restoreData(data){
  if(!data?.collections||typeof data.collections!=='object')throw Error('Invalid SKMedKART backup file.');
  if(configured){
   if(!db)await ensureFirebase();
+  if(!navigator.onLine)throw Error('Internet connection is offline. Connect to the internet and restore again.');
+  const status=$('restoreStatus');
   const total=backupCollections.reduce((n,name)=>n+(Array.isArray(data.collections[name])?data.collections[name].length:0),0);
   let done=0;
-  const status=$('restoreStatus');
-  if(status)status.textContent='Backup loaded. Preparing '+total.toLocaleString()+' records...';
-  if(!navigator.onLine)throw Error('Internet connection is offline. Connect to the internet and restore again.');
+
+  // Restore is a SNAPSHOT: the selected backup is the source of truth.
+  // First write every backup record with its original ID. Never generate a new
+  // ID for a record that already has one.
   for(const name of backupCollections){
     const rows=Array.isArray(data.collections[name])?data.collections[name]:[];
     if(status)status.textContent='Restoring '+name+'... 0/'+rows.length+' ('+done+'/'+total+' total)';
     for(let i=0;i<rows.length;i+=100){
       if(!navigator.onLine)throw Error('Internet connection was lost during restore.');
       const chunk=rows.slice(i,i+100);
-      const buildBatch=()=>{
+      await commitFirestoreBatchWithRetry(()=>{
         const wb=writeBatch(db);
         chunk.forEach(row=>{
           const copy={...row};
-          const id=String(copy.id||uid());
+          const id=String(copy.id||'').trim()||uid();
           delete copy.id;
-          wb.set(doc(db,name,id),copy,{merge:true});
+          wb.set(doc(db,name,id),copy,{merge:false});
         });
         return wb;
-      };
-      await commitFirestoreBatchWithRetry(buildBatch,60000,3);
+      },60000,3);
       done+=chunk.length;
       if(status)status.textContent='Restoring '+name+'... '+Math.min(i+chunk.length,rows.length)+'/'+rows.length+' ('+done+'/'+total+' total)';
       await new Promise(requestAnimationFrame);
     }
   }
 
-  // Refresh the same in-memory collections used by Dashboard/Stock/Billing
-  // directly from the verified backup. Do not wait for onSnapshot/getDocs here.
+  // Verify the counts actually present in Firebase before declaring success.
+  // This prevents the UI from saying "Restore completed" when some records
+  // were not committed.
+  const mismatches=[];
+  for(const name of backupCollections){
+    const expected=Array.isArray(data.collections[name])?data.collections[name].length:0;
+    const actual=(await getDocs(collection(db,name))).size;
+    if(expected!==actual)mismatches.push(name+': backup '+expected+' / Firebase '+actual);
+  }
+  if(mismatches.length)throw Error('Restore verification failed. '+mismatches.join(', '));
+
   products=Array.isArray(data.collections.products)?data.collections.products:[];
   currentOrders=(Array.isArray(data.collections.orders)?data.collections.orders:[]).sort((a,b)=>t(b.createdAt)-t(a.createdAt));
   purchases=Array.isArray(data.collections.purchases)?data.collections.purchases:[];
