@@ -28,6 +28,14 @@ class MainActivity : AppCompatActivity() {
 
     private inner class AndroidBridge {
         @JavascriptInterface
+        fun setKeepScreenOn(enabled: Boolean) {
+            runOnUiThread {
+                if (enabled) window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                else window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            }
+        }
+
+        @JavascriptInterface
         fun printHtml(html: String) {
             runOnUiThread {
                 val pv = WebView(this@MainActivity)
