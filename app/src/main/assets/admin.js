@@ -1001,7 +1001,30 @@ async function commitFirestoreBatchWithRetry(batchFactory,timeoutMs=60000,maxAtt
    if(attempt<maxAttempts)await new Promise(resolve=>setTimeout(resolve,1500*attempt));
   }
  }
- throw new Error('Firebase restore could not complete this batch after '+maxAttempts+' attempts. Please check the internet connection and try again.');
+ const detail=String(lastError?.message||lastError||'Unknown Firebase error');
+ throw new Error('Firebase restore batch failed after '+maxAttempts+' attempts: '+detail);
+}
+async function restoreWriteChunks(name,items,chunkSize=10){
+ for(let i=0;i<items.length;i+=chunkSize){
+  if(!navigator.onLine)throw Error('Internet connection was lost during restore.');
+  const chunk=items.slice(i,i+chunkSize);
+  try{
+   await commitFirestoreBatchWithRetry(()=>{
+    const wb=writeBatch(db);
+    chunk.forEach(item=>wb.set(doc(db,name,item.id),item.data,{merge:false}));
+    return wb;
+   },60000,3);
+  }catch(e){
+   // A small chunk keeps each Firestore request comfortably below the 10 MiB
+   // API request limit even when bills contain large prescription/image fields.
+   // If a chunk still fails, split it further to isolate the problematic record.
+   if(chunk.length>1){
+    await restoreWriteChunks(name,chunk,Math.max(1,Math.floor(chunk.length/2)));
+   }else{
+    throw Error('Restore failed in '+name+' (record '+String(chunk[0]?.id||'unknown')+'): '+(e?.message||e));
+   }
+ }
+ }
 }
 function buildRestoreRows(name,rows){
  const seen=new Set();
@@ -1036,7 +1059,7 @@ async function restoreData(data){
    const existing=(await getDocs(collection(db,name))).docs;
    for(let i=0;i<existing.length;i+=100){
     if(!navigator.onLine)throw Error('Internet connection was lost during restore.');
-    const stale=existing.slice(i,i+100).filter(d=>!wantedIds.has(d.id));
+    const stale=existing.slice(i,i+10).filter(d=>!wantedIds.has(d.id));
     if(stale.length){
      await commitFirestoreBatchWithRetry(()=>{
       const wb=writeBatch(db);
@@ -1046,14 +1069,9 @@ async function restoreData(data){
     }
    }
 
-   for(let i=0;i<normalized.length;i+=100){
-    if(!navigator.onLine)throw Error('Internet connection was lost during restore.');
-    const chunk=normalized.slice(i,i+100);
-    await commitFirestoreBatchWithRetry(()=>{
-     const wb=writeBatch(db);
-     chunk.forEach(item=>wb.set(doc(db,name,item.id),item.data,{merge:false}));
-     return wb;
-    },60000,3);
+   for(let i=0;i<normalized.length;i+=10){
+    const chunk=normalized.slice(i,i+10);
+    await restoreWriteChunks(name,chunk,10);
     done+=chunk.length;
     if(status)status.textContent='Restoring '+name+'... '+Math.min(i+chunk.length,rows.length)+'/'+rows.length+' ('+done+'/'+total+' total)';
     await new Promise(requestAnimationFrame);
