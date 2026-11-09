@@ -1363,7 +1363,27 @@ function renderSupplierReturnPanel(){
   return '<div class="itemrow"><b>'+esc(p.productName||p.medicine||p.name||'-')+'</b> • Remaining '+remaining+'<br><span class="small">'+esc(p.supplier||p.supplierName||'-')+' • Batch '+esc(p.batchNumber||p.batch||'-')+' • Exp '+esc(p.expiryDate||'-')+'</span><div class="actions"><button class="danger" type="button" data-supplier-return="'+pid+'" onclick="window.returnToSupplier(this.dataset.supplierReturn)">↩ Return to Supplier</button></div></div>';
  }).join('');
 }
-window.openSupplierReturn=()=>{renderSupplierReturnPanel();show('purchase');setTimeout(()=>document.getElementById('supplierReturnPanel')?.scrollIntoView({behavior:'smooth',block:'start'}),50)};
+window.openSupplierReturn=()=>{
+ show('purchase');
+ let panel=$('supplierReturnPanel');
+ if(!panel){
+  const purchaseView=$('purchase');
+  const section=purchaseView?.querySelector('.section');
+  if(section){
+   panel=document.createElement('div');
+   panel.id='supplierReturnPanel';
+   panel.className='section';
+   panel.style.cssText='margin:0 0 14px;padding:14px';
+   const btn=document.createElement('button');
+   btn.className='danger';btn.type='button';btn.style.cssText='width:100%;margin-bottom:10px';
+   btn.textContent='↩ Return to Supplier';
+   btn.onclick=window.openSupplierReturn;
+   section.insertBefore(panel,section.children[1]||null);
+  }
+ }
+ renderSupplierReturnPanel();
+ setTimeout(()=>document.getElementById('supplierReturnPanel')?.scrollIntoView({behavior:'smooth',block:'start'}),50);
+};
 function purchaseRow(p){
  const pid=esc(p.id||'');
  const totalQty=Math.max(0,Number(p.qty||0));
