@@ -1004,27 +1004,32 @@ async function commitFirestoreBatchWithRetry(batchFactory,timeoutMs=60000,maxAtt
  const detail=String(lastError?.message||lastError||'Unknown Firebase error');
  throw new Error('Firebase restore batch failed after '+maxAttempts+' attempts: '+detail);
 }
-async function restoreWriteChunks(name,items,chunkSize=10){
- for(let i=0;i<items.length;i+=chunkSize){
-  if(!navigator.onLine)throw Error('Internet connection was lost during restore.');
-  const chunk=items.slice(i,i+chunkSize);
-  try{
-   await commitFirestoreBatchWithRetry(()=>{
-    const wb=writeBatch(db);
-    chunk.forEach(item=>wb.set(doc(db,name,item.id),item.data,{merge:false}));
-    return wb;
-   },60000,3);
-  }catch(e){
-   // A small chunk keeps each Firestore request comfortably below the 10 MiB
-   // API request limit even when bills contain large prescription/image fields.
-   // If a chunk still fails, split it further to isolate the problematic record.
-   if(chunk.length>1){
-    await restoreWriteChunks(name,chunk,Math.max(1,Math.floor(chunk.length/2)));
-   }else{
-    throw Error('Restore failed in '+name+' (record '+String(chunk[0]?.id||'unknown')+'): '+(e?.message||e));
+async function restoreWriteChunks(name,items,concurrency=10){
+ const queue=[...items];
+ let cursor=0;
+ async function worker(){
+  while(true){
+   const index=cursor++;
+   if(index>=queue.length)return;
+   const item=queue[index];
+   let lastError=null;
+   for(let attempt=1;attempt<=3;attempt++){
+    try{
+     if(!navigator.onLine)throw Error('Internet connection was lost during restore.');
+     const p=setDoc(doc(db,name,item.id),item.data,{merge:false});
+     const timeout=new Promise((_,reject)=>setTimeout(()=>reject(new Error('Firebase document write timeout')),20000));
+     await Promise.race([p,timeout]);
+     lastError=null;
+     break;
+    }catch(e){
+     lastError=e;
+     if(attempt<3)await new Promise(resolve=>setTimeout(resolve,1000*attempt));
+    }
    }
+   if(lastError)throw Error('Restore failed in '+name+' (record '+String(item.id||'unknown')+'): '+(lastError?.message||lastError));
+  }
  }
- }
+ await Promise.all(Array.from({length:Math.min(concurrency,queue.length)},()=>worker()));
 }
 function buildRestoreRows(name,rows){
  const seen=new Set();
