@@ -47,6 +47,7 @@ function scheduleCatalogPublish(){clearTimeout(catalogPublishTimer);catalogPubli
 window.publishCustomerCatalog=publishCustomerCatalog;
 
 let db=null,auth=null,currentOrders=[],products=[],purchases=[],batches=[],bills=[],customers=[],reminders=[],suppliers=[],liveStarted=false,billCart=[],sourceOrderId='',discountType='flat';
+let firebaseUnsubs=[];
 let scheduleFilter='H';
 let editingPurchaseId='';
 let effectiveStockCache=new Map();
@@ -489,7 +490,19 @@ async function loadAll(force=false){
  products=get('products',products).filter(x=>!getDeletedProducts().has(String(x.id)));currentOrders=get('orders',currentOrders);purchases=get('purchases',purchases);batches=get('batches',batches);bills=get('bills',bills);customers=get('customers',customers);reminders=get('reminders',reminders);suppliers=get('suppliers',suppliers);
  liveStarted=true;
  const mergeRemoteKeepLocal=(localRows,remoteRows)=>{const map=new Map((localRows||[]).map(x=>[String(x?.id||''),x]));for(const x of (remoteRows||[])){const id=String(x?.id||'');if(id)map.set(id,x)}return [...map.values()]};
- const listen=(name,assign)=>onSnapshot(collection(db,name),s=>{const rows=s.docs.map(d=>({id:d.id,...d.data()}));if(name==='products'){const deleted=getDeletedProducts();assign(rows.filter(x=>!deleted.has(String(x.id))))}else assign(rows);if(name==='bills')bills=mergePendingBills(bills);if(name==='products'||name==='batches')applyPendingStockOverlay();renderAll();schedulePendingBillSync()},e=>{console.error('Firebase '+name+' error:',e);const n=$('notice');if(n)n.innerHTML='<b>⚠️ Firebase '+esc(name)+' sync issue</b><br><span class="small">Billing remains available; local changes are retained and will retry automatically.</span>'});
+ const listen=(name,assign)=>{
+   const unsub=onSnapshot(collection(db,name),s=>{
+     const rows=s.docs.map(d=>({id:d.id,...d.data()}));
+     if(name==='products'){const deleted=getDeletedProducts();assign(rows.filter(x=>!deleted.has(String(x.id))))}else assign(rows);
+     if(name==='bills')bills=mergePendingBills(bills);
+     if(name==='products'||name==='batches')applyPendingStockOverlay();
+     renderAll();schedulePendingBillSync();
+   },e=>{
+     console.error('Firebase '+name+' error:',e);
+     const n=$('notice');if(n)n.innerHTML='<b>⚠️ Firebase '+esc(name)+' sync issue</b><br><span class="small">Billing remains available; local changes are retained and will retry automatically.</span>'
+   });
+   firebaseUnsubs.push(unsub);
+ };
  listen('orders',v=>currentOrders=v.sort((a,b)=>t(b.createdAt)-t(a.createdAt)));
  listen('products',v=>{products=mergeRemoteKeepLocal(products,v);set('products',products);applyPendingStockOverlay()});
  listen('purchases',v=>{purchases=mergePendingPurchases(mergeRemoteKeepLocal(purchases,v));set('purchases',purchases);schedulePendingPurchaseSync()});
@@ -499,7 +512,9 @@ async function loadAll(force=false){
  listen('reminders',v=>reminders=v.sort((a,b)=>t(a.reminderDate)-t(b.reminderDate)));
  listen('suppliers',v=>suppliers=v);
  schedulePendingBillSync();schedulePendingPurchaseSync();
-} window.loadAll=loadAll;
+}
+function stopFirebaseListeners(){const list=firebaseUnsubs.splice(0);for(const unsub of list){try{unsub()}catch(e){console.warn('Firebase listener stop failed:',e)}}liveStarted=false}
+window.loadAll=loadAll;
 function loadPurchaseHeaderDefaults(){
   const d=get('purchaseHeaderDefaults',{});
   if($('puDate')&&!$('puDate').value)$('puDate').value=d.date||today();
@@ -990,46 +1005,27 @@ window.downloadBackup=async()=>{try{const status=$('restoreStatus');if(status)st
 async function commitFirestoreBatchWithRetry(batchFactory,timeoutMs=60000,maxAttempts=3){
  let lastError=null;
  for(let attempt=1;attempt<=maxAttempts;attempt++){
-  const batch=batchFactory();
   try{
-   const commitPromise=batch.commit();
-   const timeout=new Promise((_,reject)=>setTimeout(()=>reject(new Error('Firebase restore batch timeout')),timeoutMs));
-   await Promise.race([commitPromise,timeout]);
+   const batch=batchFactory();
+   await Promise.race([batch.commit(),new Promise((_,reject)=>setTimeout(()=>reject(new Error('Firebase restore batch timeout')),timeoutMs))]);
    return;
   }catch(e){
    lastError=e;
    if(attempt<maxAttempts)await new Promise(resolve=>setTimeout(resolve,1500*attempt));
   }
  }
- const detail=String(lastError?.message||lastError||'Unknown Firebase error');
- throw new Error('Firebase restore batch failed after '+maxAttempts+' attempts: '+detail);
+ throw new Error('Firebase restore batch failed after '+maxAttempts+' attempts: '+String(lastError?.message||lastError||'Unknown Firebase error'));
 }
-async function restoreWriteChunks(name,items,concurrency=10){
- const queue=[...items];
- let cursor=0;
- async function worker(){
-  while(true){
-   const index=cursor++;
-   if(index>=queue.length)return;
-   const item=queue[index];
-   let lastError=null;
-   for(let attempt=1;attempt<=3;attempt++){
-    try{
-     if(!navigator.onLine)throw Error('Internet connection was lost during restore.');
-     const p=setDoc(doc(db,name,item.id),item.data,{merge:false});
-     const timeout=new Promise((_,reject)=>setTimeout(()=>reject(new Error('Firebase document write timeout')),20000));
-     await Promise.race([p,timeout]);
-     lastError=null;
-     break;
-    }catch(e){
-     lastError=e;
-     if(attempt<3)await new Promise(resolve=>setTimeout(resolve,1000*attempt));
-    }
-   }
-   if(lastError)throw Error('Restore failed in '+name+' (record '+String(item.id||'unknown')+'): '+(lastError?.message||lastError));
-  }
+async function restoreWriteChunks(name,items,chunkSize=50){
+ for(let i=0;i<items.length;i+=chunkSize){
+  if(!navigator.onLine)throw Error('Internet connection was lost during restore.');
+  const chunk=items.slice(i,i+chunkSize);
+  await commitFirestoreBatchWithRetry(()=>{
+   const wb=writeBatch(db);
+   chunk.forEach(item=>wb.set(doc(db,name,item.id),item.data,{merge:false}));
+   return wb;
+  },60000,3);
  }
- await Promise.all(Array.from({length:Math.min(concurrency,queue.length)},()=>worker()));
 }
 function buildRestoreRows(name,rows){
  const seen=new Set();
@@ -1052,6 +1048,11 @@ async function restoreData(data){
   let done=0;
 
   // Android restore is an exact SNAPSHOT of the selected backup.
+  // Pause live Firebase listeners during import. Otherwise every write causes a
+  // full remote snapshot + full mobile render, which can make a large restore freeze.
+  stopFirebaseListeners();
+  const restoreStartedAt=Date.now();
+  try{
   // The old Offline Admin app is not modified by this code.
   for(const name of backupCollections){
    const rows=Array.isArray(data.collections[name])?data.collections[name]:[];
@@ -1114,7 +1115,12 @@ async function restoreData(data){
   if(Array.isArray(data.collections.stockMovements))set('stockMovements',data.collections.stockMovements);
   rebuildEffectiveStockCache();
   applyPendingStockOverlay();
-  liveStarted=true;
+  liveStarted=false;
+  await loadAll();
+  if(status)status.textContent='Restore completed and Firebase sync restarted. '+recordCount.toLocaleString()+' records restored in '+Math.round((Date.now()-restoreStartedAt)/1000)+'s.';
+  }finally{
+   if(!liveStarted){try{await loadAll()}catch(e){console.error('Firebase listener restart after restore failed:',e)}}
+  }
  }else{
   for(const name of backupCollections){
    const rows=Array.isArray(data.collections[name])?data.collections[name]:[];
