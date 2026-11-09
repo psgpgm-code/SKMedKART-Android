@@ -1043,6 +1043,9 @@ function buildRestoreRows(name,rows){
 }
 async function restoreData(data){
  if(!data?.collections||typeof data.collections!=='object')throw Error('Invalid SKMedKART backup file.');
+ const setRestoreScreenAwake=enabled=>{
+  try{if(window.AndroidBridge&&typeof window.AndroidBridge.setKeepScreenOn==='function')window.AndroidBridge.setKeepScreenOn(!!enabled)}catch(e){console.warn('Screen-awake bridge unavailable:',e)}
+ };
  if(configured){
   if(!db)await ensureFirebase();
   if(!navigator.onLine)throw Error('Internet connection is offline. Connect to the internet and restore again.');
@@ -1055,6 +1058,7 @@ async function restoreData(data){
   // full remote snapshot + full mobile render, which can make a large restore freeze.
   stopFirebaseListeners();
   const restoreStartedAt=Date.now();
+  setRestoreScreenAwake(true);
   try{
   // The old Offline Admin app is not modified by this code.
   for(const name of backupCollections){
@@ -1145,6 +1149,7 @@ async function restoreData(data){
   await loadAll();
   if(status)status.textContent='Restore completed and Firebase sync restarted. '+recordCount.toLocaleString()+' records restored in '+Math.round((Date.now()-restoreStartedAt)/1000)+'s.';
   }finally{
+   setRestoreScreenAwake(false);
    if(!liveStarted){try{await loadAll()}catch(e){console.error('Firebase listener restart after restore failed:',e)}}
   }
  }else{
@@ -1324,6 +1329,7 @@ window.savePurchase=async()=>{
 };
 
 window.renderPurchases=()=>{
+ renderSupplierReturnPanel();
  const input=$('purchaseSearch'),box=$('purchases');
  if(!input||!box)return;
  const q=String(input.value||'').trim().toLowerCase();
@@ -1348,6 +1354,16 @@ window.renderPurchases=()=>{
  box.innerHTML='<div class="small">No purchases or products found for “'+esc(input.value)+'”.</div>';
 };
 
+function renderSupplierReturnPanel(){
+ const box=$('supplierReturnPanel');if(!box)return;
+ const eligible=purchases.filter(p=>Math.max(0,Number(p.qty||0)-Number(p.returnedToSupplierQty||0))>0);
+ if(!eligible.length){box.innerHTML='<div class="small">No purchase items available for supplier return.</div>';return}
+ box.innerHTML=eligible.slice(0,100).map(p=>{
+  const pid=esc(p.id||''),total=Math.max(0,Number(p.qty||0)),returned=Math.max(0,Number(p.returnedToSupplierQty||0)),remaining=total-returned;
+  return '<div class="itemrow"><b>'+esc(p.productName||p.medicine||p.name||'-')+'</b> • Remaining '+remaining+'<br><span class="small">'+esc(p.supplier||p.supplierName||'-')+' • Batch '+esc(p.batchNumber||p.batch||'-')+' • Exp '+esc(p.expiryDate||'-')+'</span><div class="actions"><button class="danger" type="button" data-supplier-return="'+pid+'" onclick="window.returnToSupplier(this.dataset.supplierReturn)">↩ Return to Supplier</button></div></div>';
+ }).join('');
+}
+window.openSupplierReturn=()=>{renderSupplierReturnPanel();show('purchase');setTimeout(()=>document.getElementById('supplierReturnPanel')?.scrollIntoView({behavior:'smooth',block:'start'}),50)};
 function purchaseRow(p){
  const pid=esc(p.id||'');
  const totalQty=Math.max(0,Number(p.qty||0));
