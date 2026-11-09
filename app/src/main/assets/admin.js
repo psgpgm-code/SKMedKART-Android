@@ -1002,30 +1002,33 @@ async function backupData(){
  return out;
 }
 window.downloadBackup=async()=>{try{const status=$('restoreStatus');if(status)status.textContent='Preparing backup...';const data=await backupData();const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='SKMedKART_BACKUP_'+today()+'_'+Date.now()+'.json';document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},500);if(status)status.textContent='Backup downloaded successfully.';}catch(e){alert('Backup failed: '+e.message)}};
-async function commitFirestoreBatchWithRetry(batchFactory,timeoutMs=60000,maxAttempts=3){
+async function writeOneRestoreRecord(name,item,timeoutMs=60000){
+ if(!navigator.onLine)throw Error('Internet connection was lost during restore.');
  let lastError=null;
- for(let attempt=1;attempt<=maxAttempts;attempt++){
+ for(let attempt=1;attempt<=3;attempt++){
   try{
-   const batch=batchFactory();
-   await Promise.race([batch.commit(),new Promise((_,reject)=>setTimeout(()=>reject(new Error('Firebase restore batch timeout')),timeoutMs))]);
+   await Promise.race([
+    setDoc(doc(db,name,item.id),item.data,{merge:false}),
+    new Promise((_,reject)=>setTimeout(()=>reject(new Error('Firebase document write timeout')),timeoutMs))
+   ]);
    return;
   }catch(e){
    lastError=e;
-   if(attempt<maxAttempts)await new Promise(resolve=>setTimeout(resolve,1500*attempt));
+   if(attempt<3)await new Promise(resolve=>setTimeout(resolve,1500*attempt));
   }
  }
- throw new Error('Firebase restore batch failed after '+maxAttempts+' attempts: '+String(lastError?.message||lastError||'Unknown Firebase error'));
+ throw new Error('Firebase restore failed in '+name+' record '+String(item.id||'unknown')+': '+String(lastError?.message||lastError||'Unknown Firebase error'));
 }
-async function restoreWriteChunks(name,items,chunkSize=50){
- for(let i=0;i<items.length;i+=chunkSize){
-  if(!navigator.onLine)throw Error('Internet connection was lost during restore.');
-  const chunk=items.slice(i,i+chunkSize);
-  await commitFirestoreBatchWithRetry(()=>{
-   const wb=writeBatch(db);
-   chunk.forEach(item=>wb.set(doc(db,name,item.id),item.data,{merge:false}));
-   return wb;
-  },60000,3);
+async function restoreWriteChunks(name,items,concurrency=2){
+ let cursor=0;
+ async function worker(){
+  while(true){
+   const index=cursor++;
+   if(index>=items.length)return;
+   await writeOneRestoreRecord(name,items[index],60000);
+  }
  }
+ await Promise.all(Array.from({length:Math.min(concurrency,items.length)},()=>worker()));
 }
 function buildRestoreRows(name,rows){
  const seen=new Set();
@@ -1075,15 +1078,26 @@ async function restoreData(data){
          new Promise((_,reject)=>setTimeout(()=>reject(new Error('Firebase ID scan timeout for '+name)),30000))
        ]);
    const existing=existingSnap.docs;
-   for(let i=0;i<existing.length;i+=10){
+   for(let i=0;i<existing.length;i+=2){
     if(!navigator.onLine)throw Error('Internet connection was lost during restore.');
-    const stale=existing.slice(i,i+10).filter(d=>!wantedIds.has(d.id));
+    const stale=existing.slice(i,i+2).filter(d=>!wantedIds.has(d.id));
     if(stale.length){
-     await commitFirestoreBatchWithRetry(()=>{
-      const wb=writeBatch(db);
-      stale.forEach(d=>wb.delete(d.ref));
-      return wb;
-     },60000,3);
+     await Promise.all(stale.map(async d=>{
+      let lastError=null;
+      for(let attempt=1;attempt<=3;attempt++){
+       try{
+        await Promise.race([
+         deleteDoc(d.ref),
+         new Promise((_,reject)=>setTimeout(()=>reject(new Error('Firebase delete timeout')),60000))
+        ]);
+        return;
+       }catch(e){
+        lastError=e;
+        if(attempt<3)await new Promise(resolve=>setTimeout(resolve,1500*attempt));
+       }
+      }
+      throw new Error('Firebase stale-record delete failed in '+name+' record '+d.id+': '+String(lastError?.message||lastError||'Unknown Firebase error'));
+     }));
     }
    }
 
