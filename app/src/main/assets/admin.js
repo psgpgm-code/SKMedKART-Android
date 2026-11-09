@@ -1061,9 +1061,21 @@ async function restoreData(data){
    if(status)status.textContent='Preparing '+name+'... '+rows.length+' records';
 
    // Remove Firebase records that are not present in the selected backup.
-   // This prevents old Firebase-only records from being mixed into the restored dataset.
-   const existing=(await getDocs(collection(db,name))).docs;
-   for(let i=0;i<existing.length;i+=100){
+   // IMPORTANT: fetch ONLY document IDs here. Product/bill documents can contain
+   // large image/prescription fields; downloading every field just to find stale
+   // IDs can make a mobile restore sit at "Preparing products..." for minutes.
+   const existingQuery=collection(db,name);
+   const existingSnap=typeof existingQuery.select==='function'
+     ? await Promise.race([
+         existingQuery.select('__name__').get(),
+         new Promise((_,reject)=>setTimeout(()=>reject(new Error('Firebase ID scan timeout for '+name)),30000))
+       ])
+     : await Promise.race([
+         getDocs(existingQuery),
+         new Promise((_,reject)=>setTimeout(()=>reject(new Error('Firebase ID scan timeout for '+name)),30000))
+       ]);
+   const existing=existingSnap.docs;
+   for(let i=0;i<existing.length;i+=10){
     if(!navigator.onLine)throw Error('Internet connection was lost during restore.');
     const stale=existing.slice(i,i+10).filter(d=>!wantedIds.has(d.id));
     if(stale.length){
