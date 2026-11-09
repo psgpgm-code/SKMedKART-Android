@@ -1019,6 +1019,26 @@ async function writeOneRestoreRecord(name,item,timeoutMs=60000){
  }
  throw new Error('Firebase restore failed in '+name+' record '+String(item.id||'unknown')+': '+String(lastError?.message||lastError||'Unknown Firebase error'));
 }
+async function restoreWriteBatch(name,items,timeoutMs=180000){
+ if(!items.length)return;
+ if(!navigator.onLine)throw Error('Internet connection was lost during restore.');
+ let lastError=null;
+ for(let attempt=1;attempt<=3;attempt++){
+  try{
+   const wb=writeBatch(db);
+   for(const item of items)wb.set(doc(db,name,item.id),item.data,{merge:false});
+   await Promise.race([
+    wb.commit(),
+    new Promise((_,reject)=>setTimeout(()=>reject(new Error('Firebase restore batch timeout')),timeoutMs))
+   ]);
+   return;
+  }catch(e){
+   lastError=e;
+   if(attempt<3)await new Promise(resolve=>setTimeout(resolve,2500*attempt));
+  }
+ }
+ throw new Error('Firebase restore batch failed in '+name+' after 3 attempts: '+String(lastError?.message||lastError||'Unknown Firebase error'));
+}
 async function restoreWriteChunks(name,items,concurrency=2){
  let cursor=0;
  async function worker(){
@@ -1105,9 +1125,14 @@ async function restoreData(data){
     }
    }
 
-   for(let i=0;i<normalized.length;i+=10){
-    const chunk=normalized.slice(i,i+10);
-    await restoreWriteChunks(name,chunk,10);
+   const restoreChunkSize=name==='stockMovements'?250:10;
+   for(let i=0;i<normalized.length;i+=restoreChunkSize){
+    const chunk=normalized.slice(i,i+restoreChunkSize);
+    if(name==='stockMovements'){
+     await restoreWriteBatch(name,chunk,180000);
+    }else{
+     await restoreWriteChunks(name,chunk,2);
+    }
     done+=chunk.length;
     if(status)status.textContent='Restoring '+name+'... '+Math.min(i+chunk.length,rows.length)+'/'+rows.length+' ('+done+'/'+total+' total)';
     await new Promise(requestAnimationFrame);
